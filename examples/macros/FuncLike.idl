@@ -1,0 +1,10 @@
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+// Copyright (c) 2025-2026 naskel.com
+
+#define DECL_FIELD(T, N) T N;
+
+struct Foo {
+    DECL_FIELD(int32_t, a)
+    DECL_FIELD(string,  name)
+};
+

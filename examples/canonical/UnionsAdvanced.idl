@@ -1,0 +1,27 @@
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+// Copyright (c) 2025-2026 naskel.com
+
+enum Kind {
+    A = 0,
+    B = 1,
+    C = 2
+};
+
+union U switch(int32_t) {
+    case 0: int32_t i;
+    case 1: char c;
+    default: octet raw;
+};
+
+union UE switch(Kind) {
+    case A: string name;
+    case B: uint32_t code;
+    case C: octet tag;
+};
+
+struct Container {
+    U  u;
+    UE v;
+};
+
+

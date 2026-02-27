@@ -1,0 +1,53 @@
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+// Copyright (c) 2025-2026 naskel.com
+
+// Example IDL for micro target
+// Generate with: hddsgen gen micro sensor.idl --out-dir sensor_project --example
+
+enum SensorType {
+    TEMPERATURE,
+    HUMIDITY,
+    PRESSURE,
+    ACCELEROMETER
+};
+
+enum Priority {
+    LOW = 0,
+    MEDIUM = 5,
+    HIGH = 10,
+    CRITICAL = 100
+};
+
+struct Vector3 {
+    float x;
+    float y;
+    float z;
+};
+
+struct SensorReading {
+    uint32 sensor_id;
+    SensorType type;
+    float value;
+    uint64 timestamp;
+    string<32> unit;
+    Priority priority;
+};
+
+struct SensorBatch {
+    string<64> device_name;
+    sequence<SensorReading, 16> readings;
+    Vector3 position;
+    sequence<uint8, 64> raw_data;
+};
+
+// Union example with enum discriminator
+union SensorPayload switch (SensorType) {
+    case TEMPERATURE:
+        float celsius;
+    case HUMIDITY:
+        float percent;
+    case PRESSURE:
+        float hectopascals;
+    case ACCELEROMETER:
+        Vector3 acceleration;
+};

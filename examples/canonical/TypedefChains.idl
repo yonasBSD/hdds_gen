@@ -1,0 +1,14 @@
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+// Copyright (c) 2025-2026 naskel.com
+
+typedef int32_t I32;
+
+typedef sequence<I32, 8> I32Seq8;
+
+struct AliasUse {
+    I32     a;
+    I32Seq8 b;
+    I32     c[4];
+};
+
+

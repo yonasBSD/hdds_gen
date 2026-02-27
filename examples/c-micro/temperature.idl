@@ -1,0 +1,25 @@
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+// Copyright (c) 2025-2026 naskel.com
+
+// Example IDL for c-micro target
+// Generate with: hddsgen gen c-micro temperature.idl --out-dir temp_project --example
+
+struct Temperature {
+    uint32 sensor_id;
+    float value;
+    string<32> unit;
+    uint64 timestamp;
+};
+
+enum SensorStatus {
+    OK = 0,
+    WARNING = 1,
+    ERROR = 2,
+    OFFLINE = 3
+};
+
+struct SensorData {
+    Temperature temperature;
+    SensorStatus status;
+    sequence<uint8, 64> raw_data;
+};

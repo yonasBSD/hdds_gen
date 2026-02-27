@@ -1,0 +1,12 @@
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+// Copyright (c) 2025-2026 naskel.com
+
+#if 0
+// This block should be removed entirely
+struct ShouldNotAppear { int32_t oops; };
+#endif
+
+struct Ok {
+    int32_t a;
+};
+

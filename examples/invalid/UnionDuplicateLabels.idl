@@ -1,0 +1,9 @@
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+// Copyright (c) 2025-2026 naskel.com
+
+union Udup switch(int32_t) {
+    case 1: int32_t a;
+    case 1: int32_t again;
+    default: octet raw;
+};
+

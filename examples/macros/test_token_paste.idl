@@ -1,0 +1,30 @@
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+// Copyright (c) 2025-2026 naskel.com
+
+// Test token-pasting operator (##)
+// This file tests that ## correctly concatenates tokens
+
+#define CONCAT(a, b) a ## b
+#define TRIPLE_CONCAT(a, b, c) a ## b ## c
+#define PREFIX_TYPE(t) MyPrefix_ ## t
+
+module TokenPasteTests {
+    // Basic concatenation
+    typedef int32_t CONCAT(my, _type);
+
+    // Triple concatenation
+    typedef double TRIPLE_CONCAT(float, _, type);
+
+    // Concatenation with numbers
+    const int32_t CONCAT(value, 123) = 42;
+
+    // Struct name concatenation
+    struct CONCAT(Test, Struct) {
+        int32_t CONCAT(field, _1);
+        int32_t TRIPLE_CONCAT(x, _, value);
+    };
+
+    // Typedef with prefix
+    typedef string PREFIX_TYPE(String);
+    typedef int64_t PREFIX_TYPE(Int64);
+};

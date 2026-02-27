@@ -1,0 +1,54 @@
+# SPDX-License-Identifier: MIT
+
+repos:
+  - repo: local
+    hooks:
+      - id: make-fmt
+        name: make fmt
+        entry: make
+        args: ["fmt"]
+        language: system
+        pass_filenames: false
+      - id: make-clippy
+        name: make clippy
+        entry: make
+        args: ["clippy"]
+        language: system
+        pass_filenames: false
+      - id: cargo-test
+        name: cargo test
+        entry: cargo
+        args: ["test", "--all", "--locked"]
+        language: system
+        pass_filenames: false
+      - id: idl-check
+        name: hddsgen check examples
+        entry: bash
+        language: system
+        pass_filenames: false
+        files: ^examples/.*\.idl$
+        stages: [commit]
+        args:
+          - -lc
+          - |
+            set -e
+            for f in examples/*.idl; do
+              echo "Check $f"
+              cargo run --quiet --bin hddsgen -- check "$f"
+            done
+      - id: idl-canonical-fmt
+        name: hddsgen fmt canonical (strict)
+        entry: bash
+        language: system
+        pass_filenames: false
+        files: ^examples/canonical/.*\.idl$
+        args:
+          - -lc
+          - |
+            set -e
+            for f in examples/canonical/*.idl; do
+              tmp=$(mktemp)
+              cargo run --quiet --bin hddsgen -- fmt "$f" > "$tmp"
+              diff -u "$f" "$tmp"
+              rm -f "$tmp"
+            done

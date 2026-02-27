@@ -1,0 +1,12 @@
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+// Copyright (c) 2025-2026 naskel.com
+
+#define USE_EXTRA 1
+
+struct Toggle {
+#ifdef USE_EXTRA
+    int32_t extra;
+#endif
+    string name;
+};
+

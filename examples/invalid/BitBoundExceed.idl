@@ -1,0 +1,8 @@
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+// Copyright (c) 2025-2026 naskel.com
+
+@bit_bound(8)
+bitset TooWide {
+    bitfield<5> a, @position(6);
+};
+

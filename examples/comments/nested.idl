@@ -1,0 +1,38 @@
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+// Copyright (c) 2025-2026 naskel.com
+
+// Test nested block comments
+// IDL 4.2 allows /* /* nested */ */ comments
+
+/* outer comment
+   /* inner comment */
+   still in outer comment
+*/
+
+module NestedCommentTests {
+    /* Level 1
+       /* Level 2
+          /* Level 3 */
+       */
+    */
+    struct Point {
+        int32_t x; /* field /* nested */ comment */
+        int32_t y; /* another /* nested */ field */
+    };
+
+    /* This is a complex nested structure
+       /* Section 1: Basic fields
+          - x coordinate
+          - y coordinate
+       */
+       /* Section 2: Advanced features
+          /* Subsection 2.1 */
+          /* Subsection 2.2 */
+       */
+    */
+    struct ComplexNested {
+        double x;
+        double y;
+        double z;
+    };
+};

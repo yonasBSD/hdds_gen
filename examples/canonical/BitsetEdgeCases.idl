@@ -1,0 +1,11 @@
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+// Copyright (c) 2025-2026 naskel.com
+
+@bit_bound(16)
+bitset Flags16 {
+    bitfield<3> a;
+    bitfield<5> b, @position(4);
+    bitfield<6> c, @position(10);
+};
+
+

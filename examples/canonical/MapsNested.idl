@@ -1,0 +1,13 @@
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+// Copyright (c) 2025-2026 naskel.com
+
+typedef map<string, int32_t, 100> Scoreboard;
+
+typedef map<uint32_t, string> IdToName;
+
+struct MapsNest {
+    Scoreboard scores;
+    IdToName   users;
+};
+
+

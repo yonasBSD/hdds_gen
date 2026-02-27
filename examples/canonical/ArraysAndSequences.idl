@@ -1,0 +1,14 @@
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+// Copyright (c) 2025-2026 naskel.com
+
+typedef int32_t I32;
+
+struct ArraysAndSeqs {
+    I32                   values[8];
+    sequence<int32_t>     dynamic_list;
+    sequence<uint8_t, 16> small_bytes;
+    sequence<string>      names;
+    sequence<int32_t, 4>  small_ints;
+};
+
+

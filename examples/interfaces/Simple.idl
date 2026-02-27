@@ -1,0 +1,17 @@
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+// Copyright (c) 2025-2026 naskel.com
+
+exception MyError {
+    int32_t code;
+    string message;
+};
+
+interface Greeter {
+    attribute string version;
+    readonly attribute int32_t build;
+
+    string hello(in string name);
+    oneway void notify(in string event);
+    int32_t might_fail(in int32_t x) raises (MyError);
+};
+

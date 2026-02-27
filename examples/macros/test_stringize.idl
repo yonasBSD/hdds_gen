@@ -1,0 +1,29 @@
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+// Copyright (c) 2025-2026 naskel.com
+
+// Test stringize operator (#) with proper escaping
+// This file tests that the stringize operator correctly escapes special characters
+
+#define STR(x) #x
+#define QUOTE_PATH(p) #p
+
+module StringizeTests {
+    // Simple stringize
+    const string simple = STR(hello);
+
+    // Stringize with quotes (should escape them)
+    const string with_quote = STR(foo "bar" baz);
+
+    // Stringize with backslashes (should escape them)
+    const string with_backslash = STR(C:\path\to\file);
+
+    // Stringize with multiple spaces (should collapse to single space)
+    const string with_spaces = STR(hello     world);
+
+    // Stringize empty
+    const string empty = STR();
+
+    struct TestStruct {
+        string field1;
+    };
+};

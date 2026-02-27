@@ -1,0 +1,13 @@
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+// Copyright (c) 2025-2026 naskel.com
+
+typedef fixed<9, 2> Price;
+
+typedef fixed<18, 6> BigDec;
+
+struct Finance {
+    Price  unit;
+    BigDec total;
+};
+
+

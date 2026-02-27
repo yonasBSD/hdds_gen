@@ -1,0 +1,25 @@
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+// Copyright (c) 2025-2026 naskel.com
+
+const int32_t I_POS = 42;
+
+const int32_t I_NEG = -7;
+
+const uint32_t U_HEX = 255;
+
+const uint32_t U_OCT = 493;
+
+const double PI = 3.1415926535;
+
+const double EXP = 0.000123;
+
+typedef fixed<18, 2> Money;
+
+struct Numbers {
+    int32_t  a;
+    uint32_t b;
+    double   c;
+    Money    price;
+};
+
+

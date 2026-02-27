@@ -1,0 +1,25 @@
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+// Copyright (c) 2025-2026 naskel.com
+
+@extensibility(APPENDABLE)
+struct Annotated {
+    @key
+    int32_t  id;
+    @id(2) @optional
+    string   nickname;
+    @unit("ms") @min(0) @max(60000)
+    uint32_t timeout;
+};
+
+enum Mode {
+    X = 0,
+    Y = 1
+};
+
+union U2 switch(Mode) {
+    case X: int32_t ix;
+    case Y: string sx;
+    default: octet any;
+};
+
+

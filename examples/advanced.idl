@@ -1,0 +1,43 @@
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+// Copyright (c) 2025-2026 naskel.com
+
+// Advanced IDL 4.2 features demo
+
+module Advanced {
+    // Simple struct with arrays
+    struct Point3D {
+        float coords[3];  // Fixed array
+        char name[64];    // Character array
+    };
+
+    // Struct with map
+    struct Config {
+        map<string, int32_t> settings;
+        @optional string description;
+    };
+
+    // Union with discriminator
+    union Data switch(int32_t) {
+        case 1: int32_t integer_value;
+        case 2: string string_value;
+        case 3: Point3D point_value;
+        default: octet raw_data;
+    };
+
+    // Struct with annotations
+    struct Message {
+        @key @id(1) int32_t id;
+        @position(2) string content;
+        @optional int64_t timestamp;
+    };
+
+    // Enum
+    enum Status {
+        IDLE = 0,
+        RUNNING = 1,
+        STOPPED = 2
+    };
+
+    // Typedef with sequence
+    typedef sequence<Point3D, 100> PointArray;
+};

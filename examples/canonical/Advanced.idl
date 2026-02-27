@@ -1,0 +1,36 @@
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+// Copyright (c) 2025-2026 naskel.com
+
+module Comp {
+    @appendable
+    struct Msg {
+        @key
+        int32_t               id;
+        @optional
+        string                content;
+        string<16>            name;
+        wstring<32>           wname;
+        sequence<int32_t, 10> small;
+    };
+    enum Color {
+        Red   = 0,
+        Green = 1,
+        Blue  = 2
+    };
+    typedef map<string, int32_t, 100> MapType;
+    bitset Flags {
+        bitfield<3> mode;
+        bitfield<5> value, @position(4);
+    };
+    bitmask Perm {
+        Read,
+        Write
+    };
+    union Data switch(int32_t) {
+        case 1: int32_t i;
+        default: octet raw;
+    };
+    const int32_t MAGIC = 42;
+};
+
+

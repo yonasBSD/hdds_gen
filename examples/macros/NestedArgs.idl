@@ -1,0 +1,9 @@
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+// Copyright (c) 2025-2026 naskel.com
+
+#define SEQ10(T) sequence<T, 10>
+
+struct Ns {
+    SEQ10(int32_t) items;
+};
+

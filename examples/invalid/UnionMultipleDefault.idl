@@ -1,0 +1,8 @@
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+// Copyright (c) 2025-2026 naskel.com
+
+union U switch(int32_t) {
+    default: int32_t a;
+    default: int32_t b;
+};
+

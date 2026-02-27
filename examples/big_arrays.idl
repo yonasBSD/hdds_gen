@@ -1,0 +1,12 @@
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+// Copyright (c) 2025-2026 naskel.com
+
+// Test for IDL origin comments
+module BigData {
+    struct HugeMessage {
+        char message[600000];
+        int32_t buffer[10000];
+        sequence<float, 5000> values;
+        map<string, int32_t> lookup_table;
+    };
+};

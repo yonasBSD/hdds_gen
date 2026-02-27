@@ -1,0 +1,10 @@
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+// Copyright (c) 2025-2026 naskel.com
+
+module A { struct X { int32_t a; }; };
+module B { struct X { int32_t b; }; };
+
+struct UseOk {
+    A::X ax;
+};
+

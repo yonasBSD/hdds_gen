@@ -1,0 +1,11 @@
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+// Copyright (c) 2025-2026 naskel.com
+
+struct Strings {
+    string      title;
+    wstring     wtitle;
+    string<32>  name;
+    wstring<64> wname;
+};
+
+
