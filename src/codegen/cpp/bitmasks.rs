@@ -22,7 +22,6 @@ fn write_bitmask_enum(generator: &CppGenerator, m: &Bitmask, out: &mut String) {
     let indent = generator.indent();
     let mname = &m.name;
     push_fmt(out, format_args!("{indent}// Bitmask: {mname}\n"));
-    push_fmt(out, format_args!("{indent}using {mname} = uint64_t;\n"));
     push_fmt(
         out,
         format_args!("{indent}enum class {mname} : uint64_t {{\n"),

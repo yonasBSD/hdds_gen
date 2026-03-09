@@ -342,22 +342,8 @@ impl PythonGenerator {
         // Fields - MUST sort so fields without defaults come before fields with defaults
         // Python dataclasses require this ordering, otherwise we get:
         // "TypeError: non-default argument follows default argument"
-        let has_default = |f: &Field| {
-            f.is_optional()
-                || matches!(
-                    &f.field_type,
-                    IdlType::Sequence { .. }
-                        | IdlType::Array { .. }
-                        | IdlType::Map { .. }
-                        | IdlType::Primitive(PrimitiveType::String | PrimitiveType::WString)
-                )
-        };
-
-        // Partition fields: non-default first, then default
-        let (fields_no_default, fields_with_default): (Vec<_>, Vec<_>) =
-            s.fields.iter().partition(|f| !has_default(f));
-
-        for f in fields_no_default.iter().chain(fields_with_default.iter()) {
+        // All fields get defaults so dataclass ordering doesn't matter
+        for f in s.fields.iter() {
             let is_opt = f.is_optional();
             let mut ty = Self::type_to_python(&f.field_type);
             let default_suffix = if is_opt {
@@ -375,7 +361,35 @@ impl PythonGenerator {
                     IdlType::Primitive(PrimitiveType::String | PrimitiveType::WString) => {
                         " = \"\"".to_string()
                     }
-                    _ => String::new(),
+                    IdlType::Primitive(PrimitiveType::Boolean) => " = False".to_string(),
+                    IdlType::Primitive(PrimitiveType::Float | PrimitiveType::Double | PrimitiveType::LongDouble) => {
+                        " = 0.0".to_string()
+                    }
+                    IdlType::Primitive(PrimitiveType::Char | PrimitiveType::WChar) => {
+                        " = 0".to_string()
+                    }
+                    IdlType::Primitive(_) => " = 0".to_string(),
+                    IdlType::Named(nm) => {
+                        let type_ident = Self::last_ident(nm);
+                        if let Some(td) = idx.typedefs.get(&type_ident) {
+                            // Resolve typedef to get default
+                            match &td.base_type {
+                                IdlType::Sequence { .. } | IdlType::Array { .. } => {
+                                    " = field(default_factory=list)".to_string()
+                                }
+                                IdlType::Map { .. } => " = field(default_factory=dict)".to_string(),
+                                IdlType::Primitive(PrimitiveType::String | PrimitiveType::WString) => {
+                                    " = \"\"".to_string()
+                                }
+                                _ => " = 0".to_string(),
+                            }
+                        } else if idx.structs.contains_key(&type_ident) {
+                            format!(" = field(default_factory={type_ident})")
+                        } else {
+                            // enum, bitmask, bitset
+                            " = 0".to_string()
+                        }
+                    }
                 }
             };
 
@@ -976,7 +990,62 @@ impl PythonGenerator {
                         format_args!("{indent}parts.append(struct.pack('{fmt}', {var}))\n"),
                     );
                     push_fmt(&mut out, format_args!("{indent}offset += {size}\n"));
+                } else if matches!(p, PrimitiveType::String | PrimitiveType::WString) {
+                    push_fmt(
+                        &mut out,
+                        format_args!("{indent}pad = (4 - (offset % 4)) % 4\n"),
+                    );
+                    push_fmt(
+                        &mut out,
+                        format_args!("{indent}parts.append(b'\\x00' * pad)\n"),
+                    );
+                    push_fmt(&mut out, format_args!("{indent}offset += pad\n"));
+                    push_fmt(
+                        &mut out,
+                        format_args!("{indent}_encoded = {var}.encode('utf-8') + b'\\x00'\n"),
+                    );
+                    push_fmt(
+                        &mut out,
+                        format_args!("{indent}parts.append(struct.pack('<I', len(_encoded)))\n"),
+                    );
+                    push_fmt(&mut out, format_args!("{indent}offset += 4\n"));
+                    push_fmt(
+                        &mut out,
+                        format_args!("{indent}parts.append(_encoded)\n"),
+                    );
+                    push_fmt(
+                        &mut out,
+                        format_args!("{indent}offset += len(_encoded)\n"),
+                    );
                 }
+            }
+            IdlType::Sequence { inner, .. } | IdlType::Array { inner, .. } => {
+                // Nested sequence/array: write length prefix then recurse
+                push_fmt(
+                    &mut out,
+                    format_args!("{indent}pad = (4 - (offset % 4)) % 4\n"),
+                );
+                push_fmt(
+                    &mut out,
+                    format_args!("{indent}parts.append(b'\\x00' * pad)\n"),
+                );
+                push_fmt(&mut out, format_args!("{indent}offset += pad\n"));
+                push_fmt(
+                    &mut out,
+                    format_args!("{indent}parts.append(struct.pack('<I', len({var})))\n"),
+                );
+                push_fmt(&mut out, format_args!("{indent}offset += 4\n"));
+                push_fmt(
+                    &mut out,
+                    format_args!("{indent}for _inner_elem in {var}:\n"),
+                );
+                let inner_indent = format!("{indent}    ");
+                out.push_str(&Self::emit_encode_element(
+                    "_inner_elem",
+                    inner,
+                    idx,
+                    &inner_indent,
+                ));
             }
             IdlType::Named(nm) => {
                 let type_name = Self::last_ident(nm);
@@ -1559,7 +1628,61 @@ impl PythonGenerator {
                         &mut out,
                         format_args!("{indent}_{list_name}.append(_elem)\n"),
                     );
+                } else if matches!(p, PrimitiveType::String | PrimitiveType::WString) {
+                    push_fmt(
+                        &mut out,
+                        format_args!("{indent}offset += (4 - (offset % 4)) % 4\n"),
+                    );
+                    push_fmt(
+                        &mut out,
+                        format_args!(
+                            "{indent}_slen, = struct.unpack_from('<I', data, offset)\n"
+                        ),
+                    );
+                    push_fmt(&mut out, format_args!("{indent}offset += 4\n"));
+                    push_fmt(
+                        &mut out,
+                        format_args!(
+                            "{indent}_elem = data[offset:offset+_slen-1].decode('utf-8')\n"
+                        ),
+                    );
+                    push_fmt(&mut out, format_args!("{indent}offset += _slen\n"));
+                    push_fmt(
+                        &mut out,
+                        format_args!("{indent}_{list_name}.append(_elem)\n"),
+                    );
                 }
+            }
+            IdlType::Sequence { inner, .. } | IdlType::Array { inner, .. } => {
+                // Nested sequence/array: read length, then recurse
+                push_fmt(
+                    &mut out,
+                    format_args!("{indent}offset += (4 - (offset % 4)) % 4\n"),
+                );
+                push_fmt(
+                    &mut out,
+                    format_args!("{indent}_inner_len, = struct.unpack_from('<I', data, offset)\n"),
+                );
+                push_fmt(&mut out, format_args!("{indent}offset += 4\n"));
+                push_fmt(
+                    &mut out,
+                    format_args!("{indent}_inner_list = []\n"),
+                );
+                push_fmt(
+                    &mut out,
+                    format_args!("{indent}for _ in range(_inner_len):\n"),
+                );
+                let inner_indent = format!("{indent}    ");
+                out.push_str(&Self::emit_decode_element(
+                    "inner_list",
+                    inner,
+                    idx,
+                    &inner_indent,
+                ));
+                push_fmt(
+                    &mut out,
+                    format_args!("{indent}_{list_name}.append(_inner_list)\n"),
+                );
             }
             IdlType::Named(nm) => {
                 let type_name = Self::last_ident(nm);

@@ -132,6 +132,8 @@ impl CppGenerator {
         }
         if includes.needs_cstdlib {
             output.push_str("#include <cstdlib>\n");
+            output.push_str("#include <new>\n");
+            output.push_str("#include <utility>\n");
         }
         if includes.needs_map {
             output.push_str("#include <map>\n");
@@ -285,7 +287,10 @@ impl CppIncludes {
                     self.scan_definition(inner);
                 }
             }
-            Definition::Bitmask(_) | Definition::Bitset(_) | Definition::Const(_) => {}
+            Definition::Bitset(_) => {
+                self.needs_type_traits = true;
+            }
+            Definition::Bitmask(_) | Definition::Const(_) => {}
             Definition::ForwardDecl(_) | Definition::AnnotationDecl(_) => {}
             #[cfg(feature = "interfaces")]
             Definition::Interface(_) => {}

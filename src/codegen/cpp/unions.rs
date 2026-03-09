@@ -9,19 +9,47 @@ use super::helpers::{last_ident, push_fmt, type_to_cpp};
 use super::index::DefinitionIndex;
 use super::CppGenerator;
 use crate::ast::{Union, UnionCase, UnionLabel};
-use crate::types::IdlType;
+use crate::types::{IdlType, PrimitiveType};
 use std::fmt::Write;
+
+/// Returns a loop variable name for the given nesting depth.
+fn loop_var(depth: u32) -> &'static str {
+    const VARS: &[&str] = &["i", "j", "k", "l", "m", "n"];
+    VARS.get(depth as usize).unwrap_or(&"n")
+}
+
+/// Returns true if any case field has a non-trivial C++ type that cannot
+/// live inside an anonymous union without explicit constructors/destructors.
+fn has_nontrivial_case(u: &Union, idx: &DefinitionIndex) -> bool {
+    u.cases.iter().any(|c| is_nontrivial_type(&c.field.field_type, idx))
+}
+
+fn is_nontrivial_type(ty: &IdlType, idx: &DefinitionIndex) -> bool {
+    match ty {
+        IdlType::Primitive(PrimitiveType::String | PrimitiveType::WString) => true,
+        IdlType::Sequence { bound: None, .. } => true,
+        IdlType::Map { .. } => true,
+        IdlType::Named(nm) => {
+            let ident = last_ident(nm);
+            idx.structs.contains_key(ident) || idx.unions.contains_key(ident)
+        }
+        _ => false,
+    }
+}
 
 pub(super) fn generate_union(generator: &CppGenerator, u: &Union, idx: &DefinitionIndex) -> String {
     let mut output = String::new();
-    write_union_prologue(generator, &mut output, u);
-    write_union_cases(generator, &mut output, u);
-    write_union_codec(generator, &mut output, u, idx);
+    let nontrivial = has_nontrivial_case(u, idx);
+    write_union_prologue(generator, &mut output, u, nontrivial);
+    if !nontrivial {
+        write_union_cases(generator, &mut output, u);
+    }
+    write_union_codec(generator, &mut output, u, idx, nontrivial);
     write_union_epilogue(generator, &mut output);
     output
 }
 
-fn write_union_prologue(generator: &CppGenerator, out: &mut String, u: &Union) {
+fn write_union_prologue(generator: &CppGenerator, out: &mut String, u: &Union, nontrivial: bool) {
     let indent = generator.indent();
     let name = &u.name;
     let disc = &u.discriminator;
@@ -31,11 +59,29 @@ fn write_union_prologue(generator: &CppGenerator, out: &mut String, u: &Union) {
         format_args!("{indent}// Union: {name} (discriminator: {disc:?})\n"),
     );
     push_fmt(out, format_args!("{indent}struct {name} {{\n"));
-    push_fmt(
-        out,
-        format_args!("{indent}    {disc_cpp} _d;  // discriminator\n"),
-    );
-    push_fmt(out, format_args!("{indent}    union {{\n"));
+
+    if nontrivial {
+        // Non-trivial members: emit flat fields with default values (no anonymous union)
+        push_fmt(
+            out,
+            format_args!("{indent}    {disc_cpp} _d = {{}};  // discriminator\n"),
+        );
+        for case in &u.cases {
+            let field_type = type_to_cpp(&case.field.field_type);
+            let field_name = &case.field.name;
+            push_fmt(
+                out,
+                format_args!("{indent}    {field_type} {field_name}{{}};\n"),
+            );
+        }
+        push_fmt(out, format_args!("\n"));
+    } else {
+        push_fmt(
+            out,
+            format_args!("{indent}    {disc_cpp} _d;  // discriminator\n"),
+        );
+        push_fmt(out, format_args!("{indent}    union {{\n"));
+    }
 }
 
 fn write_union_cases(generator: &CppGenerator, out: &mut String, u: &Union) {
@@ -75,13 +121,21 @@ fn write_union_epilogue(generator: &CppGenerator, out: &mut String) {
     push_fmt(out, format_args!("{indent}}};\n\n"));
 }
 
-fn write_union_codec(generator: &CppGenerator, out: &mut String, u: &Union, idx: &DefinitionIndex) {
+fn write_union_codec(
+    generator: &CppGenerator,
+    out: &mut String,
+    u: &Union,
+    idx: &DefinitionIndex,
+    nontrivial: bool,
+) {
     let indent = generator.indent();
     let member_indent = format!("{indent}    ");
     let body_indent = format!("{indent}        ");
 
-    // Close the union and start the codec methods
-    push_fmt(out, format_args!("{indent}    }} _u;\n\n"));
+    if !nontrivial {
+        // Close the anonymous union
+        push_fmt(out, format_args!("{indent}    }} _u;\n\n"));
+    }
 
     // encode_cdr2_le method
     push_fmt(
@@ -104,7 +158,7 @@ fn write_union_codec(generator: &CppGenerator, out: &mut String, u: &Union, idx:
     out.push_str(&emit_encode_discriminator(&u.discriminator, &body_indent));
 
     // Switch on discriminator to encode the appropriate field
-    out.push_str(&emit_encode_switch(u, idx, &body_indent));
+    out.push_str(&emit_encode_switch(u, idx, &body_indent, nontrivial));
 
     push_fmt(
         out,
@@ -133,7 +187,7 @@ fn write_union_codec(generator: &CppGenerator, out: &mut String, u: &Union, idx:
     out.push_str(&emit_decode_discriminator(&u.discriminator, &body_indent));
 
     // Switch on discriminator to decode the appropriate field
-    out.push_str(&emit_decode_switch(u, idx, &body_indent));
+    out.push_str(&emit_decode_switch(u, idx, &body_indent, nontrivial));
 
     push_fmt(
         out,
@@ -195,7 +249,7 @@ fn discriminator_layout(disc: &IdlType) -> (usize, usize) {
     }
 }
 
-fn emit_encode_switch(u: &Union, idx: &DefinitionIndex, indent: &str) -> String {
+fn emit_encode_switch(u: &Union, idx: &DefinitionIndex, indent: &str, nontrivial: bool) -> String {
     let mut out = String::new();
     let switch_indent = format!("{indent}    ");
 
@@ -225,7 +279,11 @@ fn emit_encode_switch(u: &Union, idx: &DefinitionIndex, indent: &str) -> String 
         }
 
         // Emit field encoding
-        let field_expr = format!("this->_u.{}", case.field.name);
+        let field_expr = if nontrivial {
+            format!("this->{}", case.field.name)
+        } else {
+            format!("this->_u.{}", case.field.name)
+        };
         out.push_str(&emit_encode_union_field(
             &case.field,
             idx,
@@ -239,7 +297,7 @@ fn emit_encode_switch(u: &Union, idx: &DefinitionIndex, indent: &str) -> String 
     out
 }
 
-fn emit_decode_switch(u: &Union, idx: &DefinitionIndex, indent: &str) -> String {
+fn emit_decode_switch(u: &Union, idx: &DefinitionIndex, indent: &str, nontrivial: bool) -> String {
     let mut out = String::new();
     let switch_indent = format!("{indent}    ");
 
@@ -269,7 +327,11 @@ fn emit_decode_switch(u: &Union, idx: &DefinitionIndex, indent: &str) -> String 
         }
 
         // Emit field decoding
-        let field_expr = format!("this->_u.{}", case.field.name);
+        let field_expr = if nontrivial {
+            format!("this->{}", case.field.name)
+        } else {
+            format!("this->_u.{}", case.field.name)
+        };
         out.push_str(&emit_decode_union_field(
             &case.field,
             idx,
@@ -315,7 +377,7 @@ fn emit_encode_union_field(
     indent: &str,
     value_expr: &str,
 ) -> String {
-    emit_encode_type(indent, &field.field_type, idx, value_expr, &field.name)
+    emit_encode_type(indent, &field.field_type, idx, value_expr, &field.name, 0)
 }
 
 fn emit_decode_union_field(
@@ -324,7 +386,7 @@ fn emit_decode_union_field(
     indent: &str,
     value_expr: &str,
 ) -> String {
-    emit_decode_type(indent, &field.field_type, idx, value_expr, &field.name)
+    emit_decode_type(indent, &field.field_type, idx, value_expr, &field.name, 0)
 }
 
 // Inline encode/decode type emitters for union fields
@@ -336,8 +398,8 @@ fn emit_encode_type(
     idx: &DefinitionIndex,
     value_expr: &str,
     field_name: &str,
+    depth: u32,
 ) -> String {
-    use crate::types::PrimitiveType;
     match ty {
         IdlType::Primitive(p) => match p {
             PrimitiveType::String => encode_string(indent, value_expr),
@@ -351,13 +413,13 @@ fn emit_encode_type(
             ),
         },
         IdlType::Array { inner, size } => {
-            encode_array(indent, inner, *size, idx, value_expr, field_name)
+            encode_array(indent, inner, *size, idx, value_expr, field_name, depth)
         }
         IdlType::Sequence { inner, .. } => {
-            encode_sequence(indent, inner, idx, value_expr, field_name)
+            encode_sequence(indent, inner, idx, value_expr, field_name, depth)
         }
         IdlType::Map { key, value, .. } => {
-            encode_map(indent, key, value, idx, value_expr, field_name)
+            encode_map(indent, key, value, idx, value_expr, field_name, depth)
         }
         IdlType::Named(nm) => {
             let type_ident = last_ident(nm);
@@ -385,7 +447,7 @@ fn emit_encode_type(
                     &format!("static_cast<std::int32_t>({value_expr})"),
                 )
             } else if let Some(td) = idx.typedefs.get(type_ident) {
-                emit_encode_type(indent, &td.base_type, idx, value_expr, field_name)
+                emit_encode_type(indent, &td.base_type, idx, value_expr, field_name, depth)
             } else {
                 format!("{indent}return -1; // unsupported named type `{type_ident}`\n")
             }
@@ -399,8 +461,8 @@ fn emit_decode_type(
     idx: &DefinitionIndex,
     value_expr: &str,
     field_name: &str,
+    depth: u32,
 ) -> String {
-    use crate::types::PrimitiveType;
     match ty {
         IdlType::Primitive(p) => match p {
             PrimitiveType::String => decode_string(indent, value_expr),
@@ -414,13 +476,13 @@ fn emit_decode_type(
             ),
         },
         IdlType::Array { inner, size } => {
-            decode_array(indent, inner, *size, idx, value_expr, field_name)
+            decode_array(indent, inner, *size, idx, value_expr, field_name, depth)
         }
         IdlType::Sequence { inner, bound } => {
-            decode_sequence(indent, inner, *bound, idx, value_expr, field_name)
+            decode_sequence(indent, inner, *bound, idx, value_expr, field_name, depth)
         }
         IdlType::Map { key, value, .. } => {
-            decode_map(indent, key, value, idx, value_expr, field_name)
+            decode_map(indent, key, value, idx, value_expr, field_name, depth)
         }
         IdlType::Named(nm) => {
             let type_ident = last_ident(nm);
@@ -462,7 +524,7 @@ fn emit_decode_type(
                 );
                 out
             } else if let Some(td) = idx.typedefs.get(type_ident) {
-                emit_decode_type(indent, &td.base_type, idx, value_expr, field_name)
+                emit_decode_type(indent, &td.base_type, idx, value_expr, field_name, depth)
             } else {
                 format!("{indent}return -1; // unsupported named type `{type_ident}`\n")
             }
@@ -655,19 +717,22 @@ fn encode_array(
     idx: &DefinitionIndex,
     value_expr: &str,
     field_name: &str,
+    depth: u32,
 ) -> String {
     let mut out = String::new();
+    let var = loop_var(depth);
     let align = idx.align_of(inner);
     let _ = writeln!(out, "{indent}offset = cdr2::align_offset(offset, {align});");
-    let _ = writeln!(out, "{indent}for (std::size_t i = 0; i < {size}; ++i) {{");
+    let _ = writeln!(out, "{indent}for (std::size_t {var} = 0; {var} < {size}; ++{var}) {{");
     let next_indent = format!("{indent}    ");
-    let element_value = format!("{value_expr}[i]");
+    let element_value = format!("{value_expr}[{var}]");
     out.push_str(&emit_encode_type(
         &next_indent,
         inner,
         idx,
         &element_value,
         &format!("{field_name}_elem"),
+        depth + 1,
     ));
     let _ = writeln!(out, "{indent}}}");
     out
@@ -680,19 +745,22 @@ fn decode_array(
     idx: &DefinitionIndex,
     value_expr: &str,
     field_name: &str,
+    depth: u32,
 ) -> String {
     let mut out = String::new();
+    let var = loop_var(depth);
     let align = idx.align_of(inner);
     let _ = writeln!(out, "{indent}offset = cdr2::align_offset(offset, {align});");
-    let _ = writeln!(out, "{indent}for (std::size_t i = 0; i < {size}; ++i) {{");
+    let _ = writeln!(out, "{indent}for (std::size_t {var} = 0; {var} < {size}; ++{var}) {{");
     let next_indent = format!("{indent}    ");
-    let element_value = format!("{value_expr}[i]");
+    let element_value = format!("{value_expr}[{var}]");
     out.push_str(&emit_decode_type(
         &next_indent,
         inner,
         idx,
         &element_value,
         &format!("{field_name}_elem"),
+        depth + 1,
     ));
     let _ = writeln!(out, "{indent}}}");
     out
@@ -704,8 +772,10 @@ fn encode_sequence(
     idx: &DefinitionIndex,
     value_expr: &str,
     field_name: &str,
+    depth: u32,
 ) -> String {
     let mut out = String::new();
+    let var = loop_var(depth);
     let _ = writeln!(out, "{indent}offset = cdr2::align_offset(offset, 4);");
     let _ = write!(
         out,
@@ -718,16 +788,17 @@ fn encode_sequence(
     );
     let _ = writeln!(
         out,
-        "{indent}for (std::size_t i = 0; i < {value_expr}.size(); ++i) {{"
+        "{indent}for (std::size_t {var} = 0; {var} < {value_expr}.size(); ++{var}) {{"
     );
     let next_indent = format!("{indent}    ");
-    let element_value = format!("{value_expr}[i]");
+    let element_value = format!("{value_expr}[{var}]");
     out.push_str(&emit_encode_type(
         &next_indent,
         inner,
         idx,
         &element_value,
         &format!("{field_name}_elem"),
+        depth + 1,
     ));
     let _ = writeln!(out, "{indent}}}");
     out
@@ -740,8 +811,10 @@ fn decode_sequence(
     idx: &DefinitionIndex,
     value_expr: &str,
     field_name: &str,
+    depth: u32,
 ) -> String {
     let mut out = String::new();
+    let var = loop_var(depth);
 
     if let Some(max_size) = bound {
         // Bounded sequence: std::array
@@ -754,16 +827,17 @@ fn decode_sequence(
              {indent}    std::memcpy(&seq_len, src + offset, 4);\n\
              {indent}    offset += 4;\n\
              {indent}    if (seq_len > {max_size}) return -1;\n\
-             {indent}    for (std::size_t i = 0; i < seq_len && i < {max_size}; ++i) {{\n"
+             {indent}    for (std::size_t {var} = 0; {var} < seq_len && {var} < {max_size}; ++{var}) {{\n"
         );
         let inner_indent = format!("{indent}        ");
-        let element_value = format!("{value_expr}[i]");
+        let element_value = format!("{value_expr}[{var}]");
         out.push_str(&emit_decode_type(
             &inner_indent,
             inner,
             idx,
             &element_value,
             &format!("{field_name}_elem"),
+            depth + 1,
         ));
         let _ = write!(
             out,
@@ -785,16 +859,17 @@ fn decode_sequence(
         );
         let _ = writeln!(
             out,
-            "{indent}for (std::size_t i = 0; i < {value_expr}.size(); ++i) {{"
+            "{indent}for (std::size_t {var} = 0; {var} < {value_expr}.size(); ++{var}) {{"
         );
         let next_indent = format!("{indent}    ");
-        let element_value = format!("{value_expr}[i]");
+        let element_value = format!("{value_expr}[{var}]");
         out.push_str(&emit_decode_type(
             &next_indent,
             inner,
             idx,
             &element_value,
             &format!("{field_name}_elem"),
+            depth + 1,
         ));
         let _ = writeln!(out, "{indent}}}");
     }
@@ -808,6 +883,7 @@ fn encode_map(
     idx: &DefinitionIndex,
     value_expr: &str,
     field_name: &str,
+    depth: u32,
 ) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "{indent}offset = cdr2::align_offset(offset, 4);");
@@ -828,6 +904,7 @@ fn encode_map(
         idx,
         "kv.first",
         &format!("{field_name}_key"),
+        depth,
     ));
     out.push_str(&emit_encode_type(
         &next_indent,
@@ -835,6 +912,7 @@ fn encode_map(
         idx,
         "kv.second",
         &format!("{field_name}_value"),
+        depth,
     ));
     let _ = writeln!(out, "{indent}}}");
     out
@@ -847,10 +925,12 @@ fn decode_map(
     idx: &DefinitionIndex,
     value_expr: &str,
     field_name: &str,
+    depth: u32,
 ) -> String {
     let key_cpp = type_to_cpp(key);
     let value_cpp = type_to_cpp(value);
     let mut out = String::new();
+    let var = loop_var(depth);
     let _ = write!(
         out,
         "{indent}offset = cdr2::align_offset(offset, 4);\n\
@@ -860,7 +940,7 @@ fn decode_map(
          {indent}    std::memcpy(&map_len, src + offset, 4);\n\
          {indent}    offset += 4;\n\
          {indent}    {value_expr}.clear();\n\
-         {indent}    for (std::uint32_t i = 0; i < map_len; ++i) {{\n"
+         {indent}    for (std::uint32_t {var} = 0; {var} < map_len; ++{var}) {{\n"
     );
     let inner_indent = format!("{indent}        ");
     let _ = write!(
@@ -874,6 +954,7 @@ fn decode_map(
         idx,
         "key",
         &format!("{field_name}_key"),
+        depth,
     ));
     out.push_str(&emit_decode_type(
         &inner_indent,
@@ -881,6 +962,7 @@ fn decode_map(
         idx,
         "val",
         &format!("{field_name}_value"),
+        depth,
     ));
     let _ = write!(
         out,

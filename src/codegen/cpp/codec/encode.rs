@@ -50,11 +50,12 @@ pub(super) fn emit_encode_field_compat(
             idx,
             &value_expr,
             &escaped,
+            0,
         ));
         let _ = writeln!(out, "{indent}}}");
         out
     } else {
-        emit_encode_type(indent, &f.field_type, idx, &base_expr, &escaped)
+        emit_encode_type(indent, &f.field_type, idx, &base_expr, &escaped, 0)
     }
 }
 
@@ -67,7 +68,12 @@ pub(super) fn emit_encode_type_for_mutable(
     value_expr: &str,
     field_name: &str,
 ) -> String {
-    emit_encode_type(indent, ty, idx, value_expr, field_name)
+    emit_encode_type(indent, ty, idx, value_expr, field_name, 0)
+}
+
+fn loop_var(depth: u32) -> &'static str {
+    const VARS: &[&str] = &["i", "j", "k", "l", "m", "n"];
+    VARS.get(depth as usize).unwrap_or(&"n")
 }
 
 fn emit_encode_type(
@@ -76,6 +82,7 @@ fn emit_encode_type(
     idx: &DefinitionIndex,
     value_expr: &str,
     field_name: &str,
+    depth: u32,
 ) -> String {
     match ty {
         IdlType::Primitive(p) => match p {
@@ -90,17 +97,17 @@ fn emit_encode_type(
             ),
         },
         IdlType::Array { inner, size } => {
-            encode_array(indent, inner, *size, idx, value_expr, field_name)
+            encode_array(indent, inner, *size, idx, value_expr, field_name, depth)
         }
         IdlType::Sequence { inner, .. } => {
-            encode_sequence(indent, inner, idx, value_expr, field_name)
+            encode_sequence(indent, inner, idx, value_expr, field_name, depth)
         }
         IdlType::Map { key, value, .. } => {
-            encode_map(indent, key, value, idx, value_expr, field_name)
+            encode_map(indent, key, value, idx, value_expr, field_name, depth)
         }
         IdlType::Named(nm) => {
             let type_ident = last_ident_owned(nm);
-            if idx.structs.contains_key(&type_ident) {
+            if idx.structs.contains_key(&type_ident) || idx.unions.contains_key(&type_ident) {
                 format!(
                     "{indent}{{\n\
                      {indent}    int bytes = {value}.encode_cdr2_le(dst + offset, len - offset);\n\
@@ -129,7 +136,7 @@ fn emit_encode_type(
                     &format!("static_cast<std::int32_t>({})", value_expr),
                 )
             } else if let Some(td) = idx.typedefs.get(&type_ident) {
-                emit_encode_type(indent, &td.base_type, idx, value_expr, field_name)
+                emit_encode_type(indent, &td.base_type, idx, value_expr, field_name, depth)
             } else {
                 format!(
                     "{indent}return -1; // unsupported named type `{}`\n",
@@ -143,7 +150,7 @@ fn emit_encode_type(
 fn encode_scalar(indent: &str, align: usize, size: usize, value_expr: &str) -> String {
     // Check if value_expr is a cast expression (contains static_cast) - need temp variable
     // to avoid taking address of rvalue
-    if value_expr.contains("static_cast") {
+    if value_expr.contains("static_cast") || value_expr.ends_with(')') {
         let type_name = match size {
             1 => "std::uint8_t",
             2 => "std::uint16_t",
@@ -247,19 +254,22 @@ fn encode_array(
     idx: &DefinitionIndex,
     value_expr: &str,
     field_name: &str,
+    depth: u32,
 ) -> String {
+    let var = loop_var(depth);
     let mut out = String::new();
     let align = idx.align_of(inner);
     let _ = writeln!(out, "{indent}offset = cdr2::align_offset(offset, {align});");
-    let _ = writeln!(out, "{indent}for (std::size_t i = 0; i < {size}; ++i) {{");
+    let _ = writeln!(out, "{indent}for (std::size_t {var} = 0; {var} < {size}; ++{var}) {{");
     let next_indent = format!("{indent}    ");
-    let element_value = format!("{}[i]", value_expr);
+    let element_value = format!("{value_expr}[{var}]");
     out.push_str(&emit_encode_type(
         &next_indent,
         inner,
         idx,
         &element_value,
         &format!("{field_name}_elem"),
+        depth + 1,
     ));
     let _ = writeln!(out, "{indent}}}");
     out
@@ -271,7 +281,9 @@ fn encode_sequence(
     idx: &DefinitionIndex,
     value_expr: &str,
     field_name: &str,
+    depth: u32,
 ) -> String {
+    let var = loop_var(depth);
     let mut out = String::new();
     let _ = writeln!(out, "{indent}offset = cdr2::align_offset(offset, 4);");
     let _ = write!(
@@ -287,18 +299,20 @@ fn encode_sequence(
     );
     let _ = writeln!(
         out,
-        "{indent}for (std::size_t i = 0; i < {value}.size(); ++i) {{",
+        "{indent}for (std::size_t {var} = 0; {var} < {value}.size(); ++{var}) {{",
         indent = indent,
+        var = var,
         value = value_expr
     );
     let next_indent = format!("{indent}    ");
-    let element_value = format!("{}[i]", value_expr);
+    let element_value = format!("{value_expr}[{var}]");
     out.push_str(&emit_encode_type(
         &next_indent,
         inner,
         idx,
         &element_value,
         &format!("{field_name}_elem"),
+        depth + 1,
     ));
     let _ = writeln!(out, "{indent}}}");
     out
@@ -311,6 +325,7 @@ fn encode_map(
     idx: &DefinitionIndex,
     value_expr: &str,
     field_name: &str,
+    depth: u32,
 ) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "{indent}offset = cdr2::align_offset(offset, 4);");
@@ -338,6 +353,7 @@ fn encode_map(
         idx,
         "kv.first",
         &format!("{field_name}_key"),
+        depth,
     ));
     out.push_str(&emit_encode_type(
         &next_indent,
@@ -345,6 +361,7 @@ fn encode_map(
         idx,
         "kv.second",
         &format!("{field_name}_value"),
+        depth,
     ));
     let _ = writeln!(out, "{indent}}}");
     out

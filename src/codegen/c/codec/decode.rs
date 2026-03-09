@@ -15,6 +15,11 @@ use crate::ast::Field;
 use crate::types::{IdlType, PrimitiveType};
 use std::fmt::Write;
 
+fn loop_var(depth: u32) -> &'static str {
+    const VARS: &[&str] = &["i", "j", "k", "l", "m", "n"];
+    VARS.get(depth as usize).unwrap_or(&"n")
+}
+
 pub(super) fn emit_decode_field(
     f: &Field,
     idx: &DefinitionIndex,
@@ -51,6 +56,7 @@ pub(super) fn emit_decode_field(
             &ptr_expr,
             &escaped,
             c_std,
+            0,
         ));
         out.push_str("    }\n");
         out
@@ -63,6 +69,7 @@ pub(super) fn emit_decode_field(
             &ptr_expr,
             &escaped,
             c_std,
+            0,
         )
     }
 }
@@ -75,6 +82,7 @@ fn emit_decode_type(
     ptr_expr: &str,
     field_name: &str,
     c_std: CStandard,
+    depth: u32,
 ) -> String {
     let is_c89 = matches!(c_std, CStandard::C89);
 
@@ -95,15 +103,16 @@ fn emit_decode_type(
             ),
         },
         IdlType::Array { inner, size } => {
+            let var = loop_var(depth);
             let mut out = String::new();
             if is_c89 {
-                let _ = writeln!(out, "{indent}for (i = 0; i < {size}; ++i) {{");
+                let _ = writeln!(out, "{indent}for ({var} = 0; {var} < {size}; ++{var}) {{");
             } else {
-                let _ = writeln!(out, "{indent}for (uint32_t i = 0; i < {size}; ++i) {{");
+                let _ = writeln!(out, "{indent}for (uint32_t {var} = 0; {var} < {size}; ++{var}) {{");
             }
             let next_indent = format!("{indent}    ", indent = indent);
-            let element_ptr = format!("&((*{value})[i])", value = ptr_expr);
-            let element_value = format!("{}[i]", value_expr);
+            let element_value = format!("{value_expr}[{var}]");
+            let element_ptr = format!("&({value_expr}[{var}])");
             out.push_str(&emit_decode_type(
                 &next_indent,
                 inner,
@@ -112,11 +121,13 @@ fn emit_decode_type(
                 &element_ptr,
                 &format!("{field_name}_elem"),
                 c_std,
+                depth + 1,
             ));
             let _ = writeln!(out, "{indent}}}");
             out
         }
         IdlType::Sequence { inner, .. } => {
+            let var = loop_var(depth);
             let mut out = String::new();
             let _ = write!(
                 out,
@@ -138,19 +149,19 @@ fn emit_decode_type(
             if is_c89 {
                 let _ = writeln!(
                     out,
-                    "{indent}for (i = 0; i < {value}.len; ++i) {{",
+                    "{indent}for ({var} = 0; {var} < {value}.len; ++{var}) {{",
                     value = value_expr
                 );
             } else {
                 let _ = writeln!(
                     out,
-                    "{indent}for (uint32_t i = 0; i < {value}.len; ++i) {{",
+                    "{indent}for (uint32_t {var} = 0; {var} < {value}.len; ++{var}) {{",
                     value = value_expr
                 );
             }
             let next_indent = format!("{indent}    ", indent = indent);
-            let element_ptr = format!("({value}.data + i)", value = value_expr);
-            let element_value = format!("*({value}.data + i)", value = value_expr);
+            let element_value = format!("{value}.data[{var}]", value = value_expr);
+            let element_ptr = format!("&({value}.data[{var}])", value = value_expr);
             out.push_str(&emit_decode_type(
                 &next_indent,
                 inner,
@@ -159,11 +170,13 @@ fn emit_decode_type(
                 &element_ptr,
                 &format!("{field_name}_elem"),
                 c_std,
+                depth + 1,
             ));
             let _ = writeln!(out, "{indent}}}");
             out
         }
         IdlType::Map { key, value, .. } => {
+            let var = loop_var(depth);
             let mut out = String::new();
             let _ = write!(
                 out,
@@ -185,19 +198,19 @@ fn emit_decode_type(
             if is_c89 {
                 let _ = writeln!(
                     out,
-                    "{indent}for (i = 0; i < {value}.len; ++i) {{",
+                    "{indent}for ({var} = 0; {var} < {value}.len; ++{var}) {{",
                     value = value_expr
                 );
             } else {
                 let _ = writeln!(
                     out,
-                    "{indent}for (uint32_t i = 0; i < {value}.len; ++i) {{",
+                    "{indent}for (uint32_t {var} = 0; {var} < {value}.len; ++{var}) {{",
                     value = value_expr
                 );
             }
             let next_indent = format!("{indent}    ", indent = indent);
-            let key_ptr = format!("({value}.keys + i)", value = value_expr);
-            let key_value = format!("*({value}.keys + i)", value = value_expr);
+            let key_value = format!("{value}.keys[{var}]", value = value_expr);
+            let key_ptr = format!("&({value}.keys[{var}])", value = value_expr);
             out.push_str(&emit_decode_type(
                 &next_indent,
                 key,
@@ -206,9 +219,10 @@ fn emit_decode_type(
                 &key_ptr,
                 &format!("{field_name}_key"),
                 c_std,
+                depth + 1,
             ));
-            let val_ptr = format!("({value}.values + i)", value = value_expr);
-            let val_value = format!("*({value}.values + i)", value = value_expr);
+            let val_value = format!("{value}.values[{var}]", value = value_expr);
+            let val_ptr = format!("&({value}.values[{var}])", value = value_expr);
             out.push_str(&emit_decode_type(
                 &next_indent,
                 value,
@@ -217,6 +231,7 @@ fn emit_decode_type(
                 &val_ptr,
                 &format!("{field_name}_value"),
                 c_std,
+                depth + 1,
             ));
             let _ = writeln!(out, "{indent}}}");
             out
@@ -245,6 +260,7 @@ fn emit_decode_type(
                     ptr_expr,
                     field_name,
                     c_std,
+                    depth,
                 )
             } else {
                 format!(
@@ -281,9 +297,11 @@ fn decode_c_string(indent: &str, len_var: &str, target_expr: &str, is_c89: bool)
          {indent}if ({len_var} > CDR_MAX_STRING) return -CDR_INVALID_DATA;\n\
          {indent}err = cdr_need_read(len, offset, {len_var});\n\
          {indent}if (err) {{ return err; }}\n\
-         {indent}char* target = *{target_expr};\n\
-         {indent}if (target == NULL) return -CDR_INVALID_DATA;\n\
-         {indent}memcpy(target, src + offset, {len_var});\n\
+         {indent}{{\n\
+         {indent}    char* target = *{target_expr};\n\
+         {indent}    if (target == NULL) return -CDR_INVALID_DATA;\n\
+         {indent}    memcpy(target, src + offset, {len_var});\n\
+         {indent}}}\n\
          {indent}err = cdr_add(&offset, {len_var});\n\
          {indent}if (err) {{ return err; }}\n"
     )
@@ -307,9 +325,11 @@ fn decode_c_wstring(indent: &str, bytes_var: &str, target_expr: &str, is_c89: bo
          {indent}if ({bytes_var} > CDR_MAX_STRING) return -CDR_INVALID_DATA;\n\
          {indent}err = cdr_need_read(len, offset, {bytes_var});\n\
          {indent}if (err) {{ return err; }}\n\
-         {indent}wchar_t* target = *{target_expr};\n\
-         {indent}if (target == NULL) return -CDR_INVALID_DATA;\n\
-         {indent}memcpy(target, src + offset, {bytes_var});\n\
+         {indent}{{\n\
+         {indent}    wchar_t* target = *{target_expr};\n\
+         {indent}    if (target == NULL) return -CDR_INVALID_DATA;\n\
+         {indent}    memcpy(target, src + offset, {bytes_var});\n\
+         {indent}}}\n\
          {indent}err = cdr_add(&offset, {bytes_var});\n\
          {indent}if (err) {{ return err; }}\n"
     )

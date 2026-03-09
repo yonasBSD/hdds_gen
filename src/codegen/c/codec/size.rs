@@ -14,6 +14,11 @@ use crate::ast::Field;
 use crate::types::{IdlType, PrimitiveType};
 use std::fmt::Write;
 
+fn loop_var(depth: u32) -> &'static str {
+    const VARS: &[&str] = &["i", "j", "k", "l", "m", "n"];
+    VARS.get(depth as usize).unwrap_or(&"n")
+}
+
 pub(super) fn emit_max_field(f: &Field, idx: &DefinitionIndex, parent: &str) -> String {
     let escaped = c_ident(&f.name);
     let value_expr = format!("{}->{}", parent, escaped);
@@ -29,6 +34,7 @@ pub(super) fn emit_max_field(f: &Field, idx: &DefinitionIndex, parent: &str) -> 
         &value_expr,
         &ptr_expr,
         &escaped,
+        0,
     ));
     out
 }
@@ -59,6 +65,7 @@ fn emit_max_type(
     value_expr: &str,
     ptr_expr: &str,
     field_name: &str,
+    depth: u32,
 ) -> String {
     match ty {
         IdlType::Primitive(p) => match p {
@@ -82,13 +89,13 @@ fn emit_max_type(
             ),
         },
         IdlType::Array { inner, size } => {
-            emit_max_array(indent, inner, *size, idx, value_expr, field_name)
+            emit_max_array(indent, inner, *size, idx, value_expr, field_name, depth)
         }
         IdlType::Sequence { inner, .. } => {
-            emit_max_sequence(indent, inner, idx, value_expr, field_name)
+            emit_max_sequence(indent, inner, idx, value_expr, field_name, depth)
         }
         IdlType::Map { key, value, .. } => {
-            emit_max_map(indent, key, value, idx, value_expr, field_name)
+            emit_max_map(indent, key, value, idx, value_expr, field_name, depth)
         }
         IdlType::Named(nm) => {
             let type_ident = last_ident_owned(nm);
@@ -106,7 +113,7 @@ fn emit_max_type(
             } else if idx.enums.contains_key(&type_ident) {
                 super::max_scalar(indent, 4, 4)
             } else if let Some(td) = idx.typedefs.get(&type_ident) {
-                emit_max_type(indent, &td.base_type, idx, value_expr, ptr_expr, field_name)
+                emit_max_type(indent, &td.base_type, idx, value_expr, ptr_expr, field_name, depth)
             } else {
                 format!(
                     "{indent}return offset; /* unsupported named type `{type_ident}` */\n",
@@ -125,14 +132,16 @@ fn emit_max_array(
     idx: &DefinitionIndex,
     value_expr: &str,
     field_name: &str,
+    depth: u32,
 ) -> String {
+    let var = loop_var(depth);
     let mut out = String::new();
     let align = idx.align_of(inner);
     let _ = writeln!(out, "{indent}offset = cdr_align(offset, {align});");
-    let _ = writeln!(out, "{indent}for (uint32_t i = 0; i < {size}; ++i) {{");
+    let _ = writeln!(out, "{indent}for (uint32_t {var} = 0; {var} < {size}; ++{var}) {{");
     let next_indent = format!("{indent}    ", indent = indent);
-    let element_value = format!("{}[i]", value_expr);
-    let element_ptr = format!("&({}[i])", value_expr);
+    let element_value = format!("{value_expr}[{var}]");
+    let element_ptr = format!("&({value_expr}[{var}])");
     out.push_str(&emit_max_type(
         &next_indent,
         inner,
@@ -140,6 +149,7 @@ fn emit_max_array(
         &element_value,
         &element_ptr,
         &format!("{field_name}_elem"),
+        depth + 1,
     ));
     let _ = writeln!(out, "{indent}}}");
     out
@@ -151,17 +161,19 @@ fn emit_max_sequence(
     idx: &DefinitionIndex,
     value_expr: &str,
     field_name: &str,
+    depth: u32,
 ) -> String {
+    let var = loop_var(depth);
     let mut out = String::new();
     let _ = writeln!(out, "{indent}offset = cdr_align(offset, 4) + 4;");
     let _ = writeln!(
         out,
-        "{indent}for (uint32_t i = 0; i < {value}.len; ++i) {{",
+        "{indent}for (uint32_t {var} = 0; {var} < {value}.len; ++{var}) {{",
         value = value_expr
     );
     let next_indent = format!("{indent}    ", indent = indent);
-    let element_value = format!("*({value}.data + i)", value = value_expr);
-    let element_ptr = format!("({value}.data + i)", value = value_expr);
+    let element_value = format!("{value}.data[{var}]", value = value_expr);
+    let element_ptr = format!("&({value}.data[{var}])", value = value_expr);
     out.push_str(&emit_max_type(
         &next_indent,
         inner,
@@ -169,6 +181,7 @@ fn emit_max_sequence(
         &element_value,
         &element_ptr,
         &format!("{field_name}_elem"),
+        depth + 1,
     ));
     let _ = writeln!(out, "{indent}}}");
     out
@@ -181,17 +194,19 @@ fn emit_max_map(
     idx: &DefinitionIndex,
     value_expr: &str,
     field_name: &str,
+    depth: u32,
 ) -> String {
+    let var = loop_var(depth);
     let mut out = String::new();
     let _ = writeln!(out, "{indent}offset = cdr_align(offset, 4) + 4;");
     let _ = writeln!(
         out,
-        "{indent}for (uint32_t i = 0; i < {value}.len; ++i) {{",
+        "{indent}for (uint32_t {var} = 0; {var} < {value}.len; ++{var}) {{",
         value = value_expr
     );
     let next_indent = format!("{indent}    ", indent = indent);
-    let key_value = format!("*({value}.keys + i)", value = value_expr);
-    let key_ptr = format!("({value}.keys + i)", value = value_expr);
+    let key_value = format!("{value}.keys[{var}]", value = value_expr);
+    let key_ptr = format!("&({value}.keys[{var}])", value = value_expr);
     out.push_str(&emit_max_type(
         &next_indent,
         key,
@@ -199,9 +214,10 @@ fn emit_max_map(
         &key_value,
         &key_ptr,
         &format!("{field_name}_key"),
+        depth + 1,
     ));
-    let val_value = format!("*({value}.values + i)", value = value_expr);
-    let val_ptr = format!("({value}.values + i)", value = value_expr);
+    let val_value = format!("{value}.values[{var}]", value = value_expr);
+    let val_ptr = format!("&({value}.values[{var}])", value = value_expr);
     out.push_str(&emit_max_type(
         &next_indent,
         value,
@@ -209,6 +225,7 @@ fn emit_max_map(
         &val_value,
         &val_ptr,
         &format!("{field_name}_value"),
+        depth + 1,
     ));
     let _ = writeln!(out, "{indent}}}");
     out

@@ -56,6 +56,7 @@ pub(super) fn emit_decode_field_compat(
             idx,
             &temp_expr,
             &escaped,
+            0,
         ));
         let _ = writeln!(
             out,
@@ -68,7 +69,7 @@ pub(super) fn emit_decode_field_compat(
         let _ = writeln!(out, "{indent}}}");
         out
     } else {
-        emit_decode_type(indent, &f.field_type, idx, &base_expr, &escaped)
+        emit_decode_type(indent, &f.field_type, idx, &base_expr, &escaped, 0)
     }
 }
 
@@ -81,7 +82,12 @@ pub(super) fn emit_decode_type_for_mutable(
     value_expr: &str,
     field_name: &str,
 ) -> String {
-    emit_decode_type(indent, ty, idx, value_expr, field_name)
+    emit_decode_type(indent, ty, idx, value_expr, field_name, 0)
+}
+
+fn loop_var(depth: u32) -> &'static str {
+    const VARS: &[&str] = &["i", "j", "k", "l", "m", "n"];
+    VARS.get(depth as usize).unwrap_or(&"n")
 }
 
 fn emit_decode_type(
@@ -90,6 +96,7 @@ fn emit_decode_type(
     idx: &DefinitionIndex,
     value_expr: &str,
     field_name: &str,
+    depth: u32,
 ) -> String {
     match ty {
         IdlType::Primitive(p) => match p {
@@ -104,17 +111,17 @@ fn emit_decode_type(
             ),
         },
         IdlType::Array { inner, size } => {
-            decode_array(indent, inner, *size, idx, value_expr, field_name)
+            decode_array(indent, inner, *size, idx, value_expr, field_name, depth)
         }
         IdlType::Sequence { inner, bound } => {
-            decode_sequence(indent, inner, *bound, idx, value_expr, field_name)
+            decode_sequence(indent, inner, *bound, idx, value_expr, field_name, depth)
         }
         IdlType::Map { key, value, .. } => {
-            decode_map(indent, key, value, idx, value_expr, field_name)
+            decode_map(indent, key, value, idx, value_expr, field_name, depth)
         }
         IdlType::Named(nm) => {
             let type_ident = last_ident_owned(nm);
-            if idx.structs.contains_key(&type_ident) {
+            if idx.structs.contains_key(&type_ident) || idx.unions.contains_key(&type_ident) {
                 format!(
                     "{indent}{{\n\
                      {indent}    int bytes = {value}.decode_cdr2_le(src + offset, len - offset);\n\
@@ -175,7 +182,7 @@ fn emit_decode_type(
                 );
                 out
             } else if let Some(td) = idx.typedefs.get(&type_ident) {
-                emit_decode_type(indent, &td.base_type, idx, value_expr, field_name)
+                emit_decode_type(indent, &td.base_type, idx, value_expr, field_name, depth)
             } else {
                 format!(
                     "{indent}return -1; // unsupported named type `{}`\n",
@@ -272,19 +279,22 @@ fn decode_array(
     idx: &DefinitionIndex,
     value_expr: &str,
     field_name: &str,
+    depth: u32,
 ) -> String {
+    let var = loop_var(depth);
     let mut out = String::new();
     let align = idx.align_of(inner);
     let _ = writeln!(out, "{indent}offset = cdr2::align_offset(offset, {align});");
-    let _ = writeln!(out, "{indent}for (std::size_t i = 0; i < {size}; ++i) {{");
+    let _ = writeln!(out, "{indent}for (std::size_t {var} = 0; {var} < {size}; ++{var}) {{");
     let next_indent = format!("{indent}    ");
-    let element_value = format!("{}[i]", value_expr);
+    let element_value = format!("{value_expr}[{var}]");
     out.push_str(&emit_decode_type(
         &next_indent,
         inner,
         idx,
         &element_value,
         &format!("{field_name}_elem"),
+        depth + 1,
     ));
     let _ = writeln!(out, "{indent}}}");
     out
@@ -297,7 +307,9 @@ fn decode_sequence(
     idx: &DefinitionIndex,
     value_expr: &str,
     field_name: &str,
+    depth: u32,
 ) -> String {
+    let var = loop_var(depth);
     let mut out = String::new();
 
     // Bounded sequences use std::array (fixed size), unbounded use std::vector (dynamic)
@@ -312,18 +324,20 @@ fn decode_sequence(
              {indent}    std::memcpy(&seq_len, src + offset, 4);\n\
              {indent}    offset += 4;\n\
              {indent}    if (seq_len > {max_size}) return -1; // Exceeds bounded size\n\
-             {indent}    for (std::size_t i = 0; i < seq_len && i < {max_size}; ++i) {{\n",
+             {indent}    for (std::size_t {var} = 0; {var} < seq_len && {var} < {max_size}; ++{var}) {{\n",
             indent = indent,
-            max_size = max_size
+            max_size = max_size,
+            var = var
         );
         let inner_indent = format!("{indent}        ");
-        let element_value = format!("{}[i]", value_expr);
+        let element_value = format!("{value_expr}[{var}]");
         out.push_str(&emit_decode_type(
             &inner_indent,
             inner,
             idx,
             &element_value,
             &format!("{field_name}_elem"),
+            depth + 1,
         ));
         let _ = write!(
             out,
@@ -348,18 +362,20 @@ fn decode_sequence(
         );
         let _ = writeln!(
             out,
-            "{indent}for (std::size_t i = 0; i < {value}.size(); ++i) {{",
+            "{indent}for (std::size_t {var} = 0; {var} < {value}.size(); ++{var}) {{",
             indent = indent,
+            var = var,
             value = value_expr
         );
         let next_indent = format!("{indent}    ");
-        let element_value = format!("{}[i]", value_expr);
+        let element_value = format!("{value_expr}[{var}]");
         out.push_str(&emit_decode_type(
             &next_indent,
             inner,
             idx,
             &element_value,
             &format!("{field_name}_elem"),
+            depth + 1,
         ));
         let _ = writeln!(out, "{indent}}}");
     }
@@ -373,6 +389,7 @@ fn decode_map(
     idx: &DefinitionIndex,
     value_expr: &str,
     field_name: &str,
+    depth: u32,
 ) -> String {
     let key_cpp = super::super::helpers::type_to_cpp(key);
     let value_cpp = super::super::helpers::type_to_cpp(value);
@@ -402,6 +419,7 @@ fn decode_map(
         idx,
         "key",
         &format!("{field_name}_key"),
+        depth,
     ));
     out.push_str(&emit_decode_type(
         &inner_indent,
@@ -409,6 +427,7 @@ fn decode_map(
         idx,
         "val",
         &format!("{field_name}_value"),
+        depth,
     ));
     let _ = write!(
         out,
