@@ -2053,6 +2053,31 @@ impl PythonGenerator {
         format!("{} = {}\n\n", c.name, c.value)
     }
 
+    /// Qualify a union case label for Python.
+    /// Numeric literals pass through; enum variant names get qualified as `EnumType.VARIANT`.
+    fn label_to_python(disc: &IdlType, label: &str) -> String {
+        let trimmed = label.trim();
+        // If it's a numeric literal, return as-is
+        if trimmed
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_digit() || c == '-')
+        {
+            return trimmed.to_string();
+        }
+        // For named types (enums), qualify with EnumType.VARIANT
+        if let IdlType::Named(enum_name) = disc {
+            if trimmed.contains('.') {
+                trimmed.to_string()
+            } else {
+                let enum_ident = Self::last_ident(enum_name);
+                format!("{enum_ident}.{trimmed}")
+            }
+        } else {
+            trimmed.to_string()
+        }
+    }
+
     fn emit_union(&self, u: &Union, idx: &DefinitionIndex) -> String {
         use std::collections::HashSet;
         let mut out = String::new();
@@ -2071,20 +2096,35 @@ impl PythonGenerator {
         } else if types.len() == 1 {
             types[0].clone()
         } else {
-            format!("UnionType<{}>", types.join(", "))
+            format!("UnionType[{}]", types.join(", "))
         };
         push_fmt(&mut out, format_args!("@dataclass\nclass {}:\n", u.name));
         push_fmt(
             &mut out,
             format_args!("{}\"\"\"Tagged union for {}\"\"\"\n", self.indent(), u.name),
         );
+        // Compute default discriminator value
+        let disc_default = if let IdlType::Named(nm) = &u.discriminator {
+            let enum_ident = Self::last_ident(nm);
+            if let Some(e) = idx.enums.get(&enum_ident) {
+                if let Some(first) = e.variants.first() {
+                    format!(" = {enum_ident}.{}", first.name)
+                } else {
+                    " = 0".to_string()
+                }
+            } else {
+                " = 0".to_string()
+            }
+        } else {
+            " = 0".to_string()
+        };
         push_fmt(
             &mut out,
-            format_args!("{}_discriminator: {}\n", self.indent(), disc_ty),
+            format_args!("{}_discriminator: {}{}\n", self.indent(), disc_ty, disc_default),
         );
         push_fmt(
             &mut out,
-            format_args!("{}{}_value: {}\n\n", self.indent(), "", val_ann),
+            format_args!("{}_value: {} = None\n\n", self.indent(), val_ann),
         );
 
         // Emit simple properties per case (by field name)
@@ -2108,13 +2148,13 @@ impl PythonGenerator {
                     format_args!("{}    return None\n\n", self.indent()),
                 );
             } else {
-                // Simplified check: assume labels textual can be used as-is
                 let conds: Vec<String> = c
                     .labels
                     .iter()
                     .map(|l| match l {
                         crate::ast::UnionLabel::Value(v) => {
-                            format!("self._discriminator == {v}")
+                            let py_label = Self::label_to_python(&u.discriminator, v);
+                            format!("self._discriminator == {py_label}")
                         }
                         crate::ast::UnionLabel::Default => "True".to_string(),
                     })
@@ -2198,7 +2238,8 @@ impl PythonGenerator {
                     .iter()
                     .filter_map(|l| match l {
                         crate::ast::UnionLabel::Value(v) => {
-                            Some(format!("self._discriminator == {v}"))
+                            let py_label = Self::label_to_python(&u.discriminator, v);
+                            Some(format!("self._discriminator == {py_label}"))
                         }
                         crate::ast::UnionLabel::Default => None,
                     })
@@ -2385,7 +2426,10 @@ impl PythonGenerator {
                     .labels
                     .iter()
                     .filter_map(|l| match l {
-                        crate::ast::UnionLabel::Value(v) => Some(format!("_discriminator == {v}")),
+                        crate::ast::UnionLabel::Value(v) => {
+                            let py_label = Self::label_to_python(&u.discriminator, v);
+                            Some(format!("_discriminator == {py_label}"))
+                        }
                         crate::ast::UnionLabel::Default => None,
                     })
                     .collect();
@@ -2901,7 +2945,7 @@ mod tests {
         let pyg = super::PythonGenerator::new();
         let code = pyg.generate(&file)?;
         assert!(code.contains("class Data:"));
-        assert!(code.contains("_discriminator: int"));
+        assert!(code.contains("_discriminator: int = 0"));
         assert!(code.contains("_value:"));
         assert!(code.contains("def integer_value(self) -> Optional[int]"));
         assert!(code.contains("def string_value(self) -> Optional[str]"));
