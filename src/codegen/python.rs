@@ -975,118 +975,139 @@ impl PythonGenerator {
         let mut out = String::new();
         match ty {
             IdlType::Primitive(p) => {
-                if let Some((fmt, size)) = Self::primitive_to_struct_format(p) {
-                    let align = size.max(1);
-                    push_fmt(
-                        &mut out,
-                        format_args!("{indent}pad = ({align} - (offset % {align})) % {align}\n"),
-                    );
-                    push_fmt(
-                        &mut out,
-                        format_args!("{indent}parts.append(b'\\x00' * pad)\n"),
-                    );
-                    push_fmt(&mut out, format_args!("{indent}offset += pad\n"));
-                    push_fmt(
-                        &mut out,
-                        format_args!("{indent}parts.append(struct.pack('{fmt}', {var}))\n"),
-                    );
-                    push_fmt(&mut out, format_args!("{indent}offset += {size}\n"));
-                } else if matches!(p, PrimitiveType::String | PrimitiveType::WString) {
-                    push_fmt(
-                        &mut out,
-                        format_args!("{indent}pad = (4 - (offset % 4)) % 4\n"),
-                    );
-                    push_fmt(
-                        &mut out,
-                        format_args!("{indent}parts.append(b'\\x00' * pad)\n"),
-                    );
-                    push_fmt(&mut out, format_args!("{indent}offset += pad\n"));
-                    push_fmt(
-                        &mut out,
-                        format_args!("{indent}_encoded = {var}.encode('utf-8') + b'\\x00'\n"),
-                    );
-                    push_fmt(
-                        &mut out,
-                        format_args!("{indent}parts.append(struct.pack('<I', len(_encoded)))\n"),
-                    );
-                    push_fmt(&mut out, format_args!("{indent}offset += 4\n"));
-                    push_fmt(
-                        &mut out,
-                        format_args!("{indent}parts.append(_encoded)\n"),
-                    );
-                    push_fmt(
-                        &mut out,
-                        format_args!("{indent}offset += len(_encoded)\n"),
-                    );
-                }
+                Self::emit_encode_primitive(&mut out, var, p, indent);
             }
             IdlType::Sequence { inner, .. } | IdlType::Array { inner, .. } => {
-                // Nested sequence/array: write length prefix then recurse
-                push_fmt(
-                    &mut out,
-                    format_args!("{indent}pad = (4 - (offset % 4)) % 4\n"),
-                );
-                push_fmt(
-                    &mut out,
-                    format_args!("{indent}parts.append(b'\\x00' * pad)\n"),
-                );
-                push_fmt(&mut out, format_args!("{indent}offset += pad\n"));
-                push_fmt(
-                    &mut out,
-                    format_args!("{indent}parts.append(struct.pack('<I', len({var})))\n"),
-                );
-                push_fmt(&mut out, format_args!("{indent}offset += 4\n"));
-                push_fmt(
-                    &mut out,
-                    format_args!("{indent}for _inner_elem in {var}:\n"),
-                );
-                let inner_indent = format!("{indent}    ");
-                out.push_str(&Self::emit_encode_element(
-                    "_inner_elem",
-                    inner,
-                    idx,
-                    &inner_indent,
-                ));
+                Self::emit_encode_seq_or_array(&mut out, var, inner, idx, indent);
             }
             IdlType::Named(nm) => {
-                let type_name = Self::last_ident(nm);
-                if idx.structs.contains_key(&type_name) {
-                    push_fmt(
-                        &mut out,
-                        format_args!("{indent}_sub = {var}.encode_cdr2_le()\n"),
-                    );
-                    push_fmt(&mut out, format_args!("{indent}parts.append(_sub)\n"));
-                    push_fmt(&mut out, format_args!("{indent}offset += len(_sub)\n"));
-                } else if let Some(td) = idx.typedefs.get(&type_name) {
-                    // Resolve typedef and recurse
-                    out.push_str(&Self::emit_encode_element(var, &td.base_type, idx, indent));
-                } else if idx.enums.contains_key(&type_name)
-                    || idx.bitmasks.contains_key(&type_name)
-                {
-                    // Enums/bitmasks encode as int32
-                    push_fmt(
-                        &mut out,
-                        format_args!("{indent}pad = (4 - (offset % 4)) % 4\n"),
-                    );
-                    push_fmt(
-                        &mut out,
-                        format_args!("{indent}parts.append(b'\\x00' * pad)\n"),
-                    );
-                    push_fmt(&mut out, format_args!("{indent}offset += pad\n"));
-                    push_fmt(
-                        &mut out,
-                        format_args!(
-                            "{indent}parts.append(struct.pack('<i', int({var})))\n"
-                        ),
-                    );
-                    push_fmt(&mut out, format_args!("{indent}offset += 4\n"));
-                }
+                Self::emit_encode_named(&mut out, var, nm, idx, indent);
             }
             IdlType::Map { .. } => {
                 push_fmt(&mut out, format_args!("{indent}pass  # TODO: map element encoding\n"));
             }
         }
         out
+    }
+
+    fn emit_encode_primitive(out: &mut String, var: &str, p: &PrimitiveType, indent: &str) {
+        if let Some((fmt, size)) = Self::primitive_to_struct_format(p) {
+            let align = size.max(1);
+            push_fmt(
+                out,
+                format_args!("{indent}pad = ({align} - (offset % {align})) % {align}\n"),
+            );
+            push_fmt(
+                out,
+                format_args!("{indent}parts.append(b'\\x00' * pad)\n"),
+            );
+            push_fmt(out, format_args!("{indent}offset += pad\n"));
+            push_fmt(
+                out,
+                format_args!("{indent}parts.append(struct.pack('{fmt}', {var}))\n"),
+            );
+            push_fmt(out, format_args!("{indent}offset += {size}\n"));
+        } else if matches!(p, PrimitiveType::String | PrimitiveType::WString) {
+            push_fmt(
+                out,
+                format_args!("{indent}pad = (4 - (offset % 4)) % 4\n"),
+            );
+            push_fmt(
+                out,
+                format_args!("{indent}parts.append(b'\\x00' * pad)\n"),
+            );
+            push_fmt(out, format_args!("{indent}offset += pad\n"));
+            push_fmt(
+                out,
+                format_args!("{indent}_encoded = {var}.encode('utf-8') + b'\\x00'\n"),
+            );
+            push_fmt(
+                out,
+                format_args!("{indent}parts.append(struct.pack('<I', len(_encoded)))\n"),
+            );
+            push_fmt(out, format_args!("{indent}offset += 4\n"));
+            push_fmt(
+                out,
+                format_args!("{indent}parts.append(_encoded)\n"),
+            );
+            push_fmt(
+                out,
+                format_args!("{indent}offset += len(_encoded)\n"),
+            );
+        }
+    }
+
+    fn emit_encode_seq_or_array(
+        out: &mut String,
+        var: &str,
+        inner: &IdlType,
+        idx: &DefinitionIndex,
+        indent: &str,
+    ) {
+        push_fmt(
+            out,
+            format_args!("{indent}pad = (4 - (offset % 4)) % 4\n"),
+        );
+        push_fmt(
+            out,
+            format_args!("{indent}parts.append(b'\\x00' * pad)\n"),
+        );
+        push_fmt(out, format_args!("{indent}offset += pad\n"));
+        push_fmt(
+            out,
+            format_args!("{indent}parts.append(struct.pack('<I', len({var})))\n"),
+        );
+        push_fmt(out, format_args!("{indent}offset += 4\n"));
+        push_fmt(
+            out,
+            format_args!("{indent}for _inner_elem in {var}:\n"),
+        );
+        let inner_indent = format!("{indent}    ");
+        out.push_str(&Self::emit_encode_element(
+            "_inner_elem",
+            inner,
+            idx,
+            &inner_indent,
+        ));
+    }
+
+    fn emit_encode_named(
+        out: &mut String,
+        var: &str,
+        nm: &str,
+        idx: &DefinitionIndex,
+        indent: &str,
+    ) {
+        let type_name = Self::last_ident(nm);
+        if idx.structs.contains_key(&type_name) {
+            push_fmt(
+                out,
+                format_args!("{indent}_sub = {var}.encode_cdr2_le()\n"),
+            );
+            push_fmt(out, format_args!("{indent}parts.append(_sub)\n"));
+            push_fmt(out, format_args!("{indent}offset += len(_sub)\n"));
+        } else if let Some(td) = idx.typedefs.get(&type_name) {
+            out.push_str(&Self::emit_encode_element(var, &td.base_type, idx, indent));
+        } else if idx.enums.contains_key(&type_name)
+            || idx.bitmasks.contains_key(&type_name)
+        {
+            push_fmt(
+                out,
+                format_args!("{indent}pad = (4 - (offset % 4)) % 4\n"),
+            );
+            push_fmt(
+                out,
+                format_args!("{indent}parts.append(b'\\x00' * pad)\n"),
+            );
+            push_fmt(out, format_args!("{indent}offset += pad\n"));
+            push_fmt(
+                out,
+                format_args!(
+                    "{indent}parts.append(struct.pack('<i', int({var})))\n"
+                ),
+            );
+            push_fmt(out, format_args!("{indent}offset += 4\n"));
+        }
     }
 
     fn emit_decode_method(&self, s: &Struct, idx: &DefinitionIndex) -> String {
@@ -1635,131 +1656,154 @@ impl PythonGenerator {
         let mut out = String::new();
         match ty {
             IdlType::Primitive(p) => {
-                if let Some((fmt, size)) = Self::primitive_to_struct_format(p) {
-                    let align = size.max(1);
-                    push_fmt(
-                        &mut out,
-                        format_args!(
-                            "{indent}offset += ({align} - (offset % {align})) % {align}\n"
-                        ),
-                    );
-                    push_fmt(
-                        &mut out,
-                        format_args!(
-                            "{indent}_elem, = struct.unpack_from('{fmt}', data, offset)\n"
-                        ),
-                    );
-                    push_fmt(&mut out, format_args!("{indent}offset += {size}\n"));
-                    push_fmt(
-                        &mut out,
-                        format_args!("{indent}_{list_name}.append(_elem)\n"),
-                    );
-                } else if matches!(p, PrimitiveType::String | PrimitiveType::WString) {
-                    push_fmt(
-                        &mut out,
-                        format_args!("{indent}offset += (4 - (offset % 4)) % 4\n"),
-                    );
-                    push_fmt(
-                        &mut out,
-                        format_args!(
-                            "{indent}_slen, = struct.unpack_from('<I', data, offset)\n"
-                        ),
-                    );
-                    push_fmt(&mut out, format_args!("{indent}offset += 4\n"));
-                    push_fmt(
-                        &mut out,
-                        format_args!(
-                            "{indent}_elem = data[offset:offset+_slen-1].decode('utf-8')\n"
-                        ),
-                    );
-                    push_fmt(&mut out, format_args!("{indent}offset += _slen\n"));
-                    push_fmt(
-                        &mut out,
-                        format_args!("{indent}_{list_name}.append(_elem)\n"),
-                    );
-                }
+                Self::emit_decode_primitive(&mut out, list_name, p, indent);
             }
             IdlType::Sequence { inner, .. } | IdlType::Array { inner, .. } => {
-                // Nested sequence/array: read length, then recurse
-                push_fmt(
-                    &mut out,
-                    format_args!("{indent}offset += (4 - (offset % 4)) % 4\n"),
-                );
-                push_fmt(
-                    &mut out,
-                    format_args!("{indent}_inner_len, = struct.unpack_from('<I', data, offset)\n"),
-                );
-                push_fmt(&mut out, format_args!("{indent}offset += 4\n"));
-                push_fmt(
-                    &mut out,
-                    format_args!("{indent}_inner_list = []\n"),
-                );
-                push_fmt(
-                    &mut out,
-                    format_args!("{indent}for _ in range(_inner_len):\n"),
-                );
-                let inner_indent = format!("{indent}    ");
-                out.push_str(&Self::emit_decode_element(
-                    "inner_list",
-                    inner,
-                    idx,
-                    &inner_indent,
-                ));
-                push_fmt(
-                    &mut out,
-                    format_args!("{indent}_{list_name}.append(_inner_list)\n"),
-                );
+                Self::emit_decode_seq_or_array(&mut out, list_name, inner, idx, indent);
             }
             IdlType::Named(nm) => {
-                let type_name = Self::last_ident(nm);
-                if idx.structs.contains_key(&type_name) {
-                    push_fmt(
-                        &mut out,
-                        format_args!(
-                            "{indent}_elem, _read = {type_name}.decode_cdr2_le(data[offset:])\n"
-                        ),
-                    );
-                    push_fmt(&mut out, format_args!("{indent}offset += _read\n"));
-                    push_fmt(
-                        &mut out,
-                        format_args!("{indent}_{list_name}.append(_elem)\n"),
-                    );
-                } else if let Some(td) = idx.typedefs.get(&type_name) {
-                    // Resolve typedef and recurse
-                    out.push_str(&Self::emit_decode_element(
-                        list_name,
-                        &td.base_type,
-                        idx,
-                        indent,
-                    ));
-                } else if idx.enums.contains_key(&type_name)
-                    || idx.bitmasks.contains_key(&type_name)
-                {
-                    // Enums/bitmasks decode as int32
-                    push_fmt(
-                        &mut out,
-                        format_args!(
-                            "{indent}offset += (4 - (offset % 4)) % 4\n"
-                        ),
-                    );
-                    push_fmt(
-                        &mut out,
-                        format_args!(
-                            "{indent}_elem, = struct.unpack_from('<i', data, offset)\n"
-                        ),
-                    );
-                    push_fmt(&mut out, format_args!("{indent}offset += 4\n"));
-                    push_fmt(
-                        &mut out,
-                        format_args!("{indent}_{list_name}.append(_elem)\n"),
-                    );
-                }
+                Self::emit_decode_named(&mut out, list_name, nm, idx, indent);
             }
             IdlType::Map { .. } => {
                 push_fmt(&mut out, format_args!("{indent}pass  # TODO: map element decoding\n"));
             }
         }
         out
+    }
+
+    fn emit_decode_primitive(
+        out: &mut String,
+        list_name: &str,
+        p: &PrimitiveType,
+        indent: &str,
+    ) {
+        if let Some((fmt, size)) = Self::primitive_to_struct_format(p) {
+            let align = size.max(1);
+            push_fmt(
+                out,
+                format_args!(
+                    "{indent}offset += ({align} - (offset % {align})) % {align}\n"
+                ),
+            );
+            push_fmt(
+                out,
+                format_args!(
+                    "{indent}_elem, = struct.unpack_from('{fmt}', data, offset)\n"
+                ),
+            );
+            push_fmt(out, format_args!("{indent}offset += {size}\n"));
+            push_fmt(
+                out,
+                format_args!("{indent}_{list_name}.append(_elem)\n"),
+            );
+        } else if matches!(p, PrimitiveType::String | PrimitiveType::WString) {
+            push_fmt(
+                out,
+                format_args!("{indent}offset += (4 - (offset % 4)) % 4\n"),
+            );
+            push_fmt(
+                out,
+                format_args!(
+                    "{indent}_slen, = struct.unpack_from('<I', data, offset)\n"
+                ),
+            );
+            push_fmt(out, format_args!("{indent}offset += 4\n"));
+            push_fmt(
+                out,
+                format_args!(
+                    "{indent}_elem = data[offset:offset+_slen-1].decode('utf-8')\n"
+                ),
+            );
+            push_fmt(out, format_args!("{indent}offset += _slen\n"));
+            push_fmt(
+                out,
+                format_args!("{indent}_{list_name}.append(_elem)\n"),
+            );
+        }
+    }
+
+    fn emit_decode_seq_or_array(
+        out: &mut String,
+        list_name: &str,
+        inner: &IdlType,
+        idx: &DefinitionIndex,
+        indent: &str,
+    ) {
+        push_fmt(
+            out,
+            format_args!("{indent}offset += (4 - (offset % 4)) % 4\n"),
+        );
+        push_fmt(
+            out,
+            format_args!("{indent}_inner_len, = struct.unpack_from('<I', data, offset)\n"),
+        );
+        push_fmt(out, format_args!("{indent}offset += 4\n"));
+        push_fmt(out, format_args!("{indent}_inner_list = []\n"));
+        push_fmt(
+            out,
+            format_args!("{indent}for _ in range(_inner_len):\n"),
+        );
+        let inner_indent = format!("{indent}    ");
+        out.push_str(&Self::emit_decode_element(
+            "inner_list",
+            inner,
+            idx,
+            &inner_indent,
+        ));
+        push_fmt(
+            out,
+            format_args!("{indent}_{list_name}.append(_inner_list)\n"),
+        );
+    }
+
+    fn emit_decode_named(
+        out: &mut String,
+        list_name: &str,
+        nm: &str,
+        idx: &DefinitionIndex,
+        indent: &str,
+    ) {
+        let type_name = Self::last_ident(nm);
+        if idx.structs.contains_key(&type_name) {
+            push_fmt(
+                out,
+                format_args!(
+                    "{indent}_elem, _read = {type_name}.decode_cdr2_le(data[offset:])\n"
+                ),
+            );
+            push_fmt(out, format_args!("{indent}offset += _read\n"));
+            push_fmt(
+                out,
+                format_args!("{indent}_{list_name}.append(_elem)\n"),
+            );
+        } else if let Some(td) = idx.typedefs.get(&type_name) {
+            out.push_str(&Self::emit_decode_element(
+                list_name,
+                &td.base_type,
+                idx,
+                indent,
+            ));
+        } else if idx.enums.contains_key(&type_name)
+            || idx.bitmasks.contains_key(&type_name)
+        {
+            push_fmt(
+                out,
+                format_args!(
+                    "{indent}offset += (4 - (offset % 4)) % 4\n"
+                ),
+            );
+            push_fmt(
+                out,
+                format_args!(
+                    "{indent}_elem, = struct.unpack_from('<i', data, offset)\n"
+                ),
+            );
+            push_fmt(out, format_args!("{indent}offset += 4\n"));
+            push_fmt(
+                out,
+                format_args!("{indent}_{list_name}.append(_elem)\n"),
+            );
+        }
     }
 
     fn emit_decode_map_key_value(
