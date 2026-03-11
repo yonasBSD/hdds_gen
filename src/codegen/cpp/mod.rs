@@ -305,6 +305,9 @@ impl CppIncludes {
                 PrimitiveType::String | PrimitiveType::WString => {
                     self.needs_string = true;
                 }
+                PrimitiveType::Fixed { .. } => {
+                    self.needs_array = true;
+                }
                 _ => {}
             },
             IdlType::Sequence { inner, bound } => {

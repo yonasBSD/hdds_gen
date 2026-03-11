@@ -314,19 +314,22 @@ fn encode_wchar(indent: &str, value_expr: &str, is_c89: bool) -> String {
 }
 
 fn encode_fixed(indent: &str, ptr_expr: &str, is_c89: bool) -> String {
-    // For C89, raw[] is declared at function start
+    // For C89, raw[] is declared at function start; for C99+ wrap in a block
+    // to avoid redeclaration when a struct has multiple fixed fields.
     let var_decl = if is_c89 {
         ""
     } else {
         "uint8_t raw[CDR_SIZE_FIXED128];\n    "
     };
+    let (open, close) = if is_c89 { ("", "") } else { ("{\n    ", "}\n" ) };
     format!(
         "{indent}err = cdr_pad(dst, &offset, len, CDR_ALIGN_4);\n\
          {indent}if (err) {{ return err; }}\n\
          {indent}err = cdr_need_write(len, offset, CDR_SIZE_FIXED128);\n\
          {indent}if (err) {{ return err; }}\n\
-         {indent}{var_decl}cdr_fixed128_to_le({ptr_expr}, raw);\n\
+         {indent}{open}{indent}{var_decl}cdr_fixed128_to_le({ptr_expr}, raw);\n\
          {indent}memcpy(dst + offset, raw, CDR_SIZE_FIXED128);\n\
+         {indent}{close}\
          {indent}err = cdr_add(&offset, CDR_SIZE_FIXED128);\n\
          {indent}if (err) {{ return err; }}\n"
     )

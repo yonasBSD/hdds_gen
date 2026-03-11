@@ -1057,9 +1057,34 @@ impl PythonGenerator {
                     );
                     push_fmt(&mut out, format_args!("{indent}parts.append(_sub)\n"));
                     push_fmt(&mut out, format_args!("{indent}offset += len(_sub)\n"));
+                } else if let Some(td) = idx.typedefs.get(&type_name) {
+                    // Resolve typedef and recurse
+                    out.push_str(&Self::emit_encode_element(var, &td.base_type, idx, indent));
+                } else if idx.enums.contains_key(&type_name)
+                    || idx.bitmasks.contains_key(&type_name)
+                {
+                    // Enums/bitmasks encode as int32
+                    push_fmt(
+                        &mut out,
+                        format_args!("{indent}pad = (4 - (offset % 4)) % 4\n"),
+                    );
+                    push_fmt(
+                        &mut out,
+                        format_args!("{indent}parts.append(b'\\x00' * pad)\n"),
+                    );
+                    push_fmt(&mut out, format_args!("{indent}offset += pad\n"));
+                    push_fmt(
+                        &mut out,
+                        format_args!(
+                            "{indent}parts.append(struct.pack('<i', int({var})))\n"
+                        ),
+                    );
+                    push_fmt(&mut out, format_args!("{indent}offset += 4\n"));
                 }
             }
-            IdlType::Map { .. } => {}
+            IdlType::Map { .. } => {
+                push_fmt(&mut out, format_args!("{indent}pass  # TODO: map element encoding\n"));
+            }
         }
         out
     }
@@ -1699,9 +1724,40 @@ impl PythonGenerator {
                         &mut out,
                         format_args!("{indent}_{list_name}.append(_elem)\n"),
                     );
+                } else if let Some(td) = idx.typedefs.get(&type_name) {
+                    // Resolve typedef and recurse
+                    out.push_str(&Self::emit_decode_element(
+                        list_name,
+                        &td.base_type,
+                        idx,
+                        indent,
+                    ));
+                } else if idx.enums.contains_key(&type_name)
+                    || idx.bitmasks.contains_key(&type_name)
+                {
+                    // Enums/bitmasks decode as int32
+                    push_fmt(
+                        &mut out,
+                        format_args!(
+                            "{indent}offset += (4 - (offset % 4)) % 4\n"
+                        ),
+                    );
+                    push_fmt(
+                        &mut out,
+                        format_args!(
+                            "{indent}_elem, = struct.unpack_from('<i', data, offset)\n"
+                        ),
+                    );
+                    push_fmt(&mut out, format_args!("{indent}offset += 4\n"));
+                    push_fmt(
+                        &mut out,
+                        format_args!("{indent}_{list_name}.append(_elem)\n"),
+                    );
                 }
             }
-            IdlType::Map { .. } => {}
+            IdlType::Map { .. } => {
+                push_fmt(&mut out, format_args!("{indent}pass  # TODO: map element decoding\n"));
+            }
         }
         out
     }

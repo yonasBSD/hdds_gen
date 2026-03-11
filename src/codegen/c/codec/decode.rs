@@ -313,18 +313,21 @@ fn decode_wchar(indent: &str, ptr_expr: &str, is_c89: bool) -> String {
 }
 
 fn decode_fixed(indent: &str, ptr_expr: &str, is_c89: bool) -> String {
+    // Wrap in a block to avoid redeclaration of `raw` when multiple fixed fields exist.
     let var_decl = if is_c89 {
         ""
     } else {
         "uint8_t raw[CDR_SIZE_FIXED128];\n    "
     };
+    let (open, close) = if is_c89 { ("", "") } else { ("{\n    ", "}\n" ) };
     format!(
         "{indent}err = cdr_skip(src, &offset, len, CDR_ALIGN_4);\n\
          {indent}if (err) {{ return err; }}\n\
          {indent}err = cdr_need_read(len, offset, CDR_SIZE_FIXED128);\n\
          {indent}if (err) {{ return err; }}\n\
-         {indent}{var_decl}memcpy(raw, src + offset, CDR_SIZE_FIXED128);\n\
+         {indent}{open}{indent}{var_decl}memcpy(raw, src + offset, CDR_SIZE_FIXED128);\n\
          {indent}cdr_fixed128_from_le({ptr_expr}, raw);\n\
+         {indent}{close}\
          {indent}err = cdr_add(&offset, CDR_SIZE_FIXED128);\n\
          {indent}if (err) {{ return err; }}\n"
     )
