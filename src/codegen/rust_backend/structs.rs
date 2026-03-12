@@ -15,6 +15,7 @@ impl RustGenerator {
         &self,
         s: &Struct,
         module_path: Option<&str>,
+        enum_names: &[&str],
     ) -> String {
         let mut output = String::new();
         let indent = self.indent();
@@ -66,8 +67,8 @@ impl RustGenerator {
         }
 
         push_fmt(&mut output, format_args!("{indent}}}\n\n"));
-        output.push_str(&Self::emit_cdr2_encode_impl(s));
-        output.push_str(&Self::emit_cdr2_decode_impl(s));
+        output.push_str(&Self::emit_cdr2_encode_impl(s, enum_names));
+        output.push_str(&Self::emit_cdr2_decode_impl(s, enum_names));
         let is_nested = s
             .annotations
             .iter()

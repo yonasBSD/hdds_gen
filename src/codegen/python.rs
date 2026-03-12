@@ -1482,6 +1482,12 @@ impl PythonGenerator {
                             "{indent}_{name}, = struct.unpack_from('{fmt}', data, offset)\n"
                         ),
                     );
+                    if matches!(p, PrimitiveType::Boolean) {
+                        push_fmt(
+                            &mut out,
+                            format_args!("{indent}_{name} = bool(_{name})\n"),
+                        );
+                    }
                     push_fmt(&mut out, format_args!("{indent}offset += {size}\n"));
                 } else if matches!(p, PrimitiveType::String) {
                     push_fmt(
@@ -1691,6 +1697,9 @@ impl PythonGenerator {
                     "{indent}_elem, = struct.unpack_from('{fmt}', data, offset)\n"
                 ),
             );
+            if matches!(p, PrimitiveType::Boolean) {
+                push_fmt(out, format_args!("{indent}_elem = bool(_elem)\n"));
+            }
             push_fmt(out, format_args!("{indent}offset += {size}\n"));
             push_fmt(
                 out,
@@ -1846,6 +1855,12 @@ impl PythonGenerator {
                             "{indent}{var_name}, = struct.unpack_from('{fmt}', data, offset)\n"
                         ),
                     );
+                    if matches!(p, PrimitiveType::Boolean) {
+                        push_fmt(
+                            &mut out,
+                            format_args!("{indent}{var_name} = bool({var_name})\n"),
+                        );
+                    }
                     push_fmt(&mut out, format_args!("{indent}offset += {size}\n"));
                 } else if matches!(p, PrimitiveType::String) {
                     push_fmt(

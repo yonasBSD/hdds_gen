@@ -164,6 +164,16 @@ impl RustGenerator {
             Some(module_path.join("::"))
         };
 
+        // Collect enum names for CDR2 alignment: Named enums need padding,
+        // Named structs self-align their internal fields (no outer padding).
+        let enum_names: Vec<&str> = definitions
+            .iter()
+            .filter_map(|d| match d {
+                Definition::Enum(e) => Some(e.name.as_str()),
+                _ => None,
+            })
+            .collect();
+
         for def in definitions {
             match def {
                 Definition::Module(m) => {
@@ -177,7 +187,7 @@ impl RustGenerator {
                     push_fmt(output, format_args!("{indent}}}\n\n"));
                 }
                 Definition::Struct(s) => {
-                    let code = self.generate_struct_with_module(s, module_name.as_deref());
+                    let code = self.generate_struct_with_module(s, module_name.as_deref(), &enum_names);
                     if indent.is_empty() {
                         output.push_str(&code);
                     } else {

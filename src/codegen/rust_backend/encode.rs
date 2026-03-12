@@ -12,7 +12,7 @@ use crate::ast::{Field, Struct};
 use crate::types::{IdlType, PrimitiveType};
 
 impl RustGenerator {
-    pub(super) fn emit_cdr2_encode_impl(s: &Struct) -> String {
+    pub(super) fn emit_cdr2_encode_impl(s: &Struct, enum_names: &[&str]) -> String {
         if super::helpers::is_compact_mutable_struct(s) {
             return Self::emit_pl_cdr2_compact_encode_impl(s);
         }
@@ -39,7 +39,14 @@ impl RustGenerator {
             if field.is_optional() {
                 code.push_str(&Self::emit_optional_field_encode(field));
             } else {
-                let alignment = Self::cdr2_alignment(&field.field_type);
+                // Named structs self-align their internal fields, so no
+                // outer padding is needed.  Named enums serialize as a
+                // plain integer and DO need the alignment from
+                // cdr2_alignment().
+                let alignment = match &field.field_type {
+                    IdlType::Named(name) if !enum_names.contains(&name.as_str()) => 1,
+                    _ => Self::cdr2_alignment(&field.field_type),
+                };
                 if alignment > 1 {
                     push_fmt(
                         &mut code,
