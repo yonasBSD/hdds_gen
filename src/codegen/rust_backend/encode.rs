@@ -14,20 +14,22 @@ use crate::types::{IdlType, PrimitiveType};
 impl RustGenerator {
     /// Emit encode methods for a struct.
     ///
-    /// For `@mutable` types, falls through to the PL_CDR2 emitter (still a
-    /// single `impl Cdr2Encode for T` block for Etape 2.2-a -- updated in 2.2-b).
-    /// For `@final` / default structs, emits inherent `pub fn encode_xcdrN_le`
-    /// and `pub fn max_xcdrN_size` methods on `impl T {}`. The top-level in
-    /// `generate_struct_with_module` calls this twice, once per version in
-    /// [`super::helpers::VERSIONS_TO_EMIT`], and then emits a trait delegator
-    /// through [`Self::emit_cdr_trait_delegator`].
+    /// All three dispatch branches now emit inherent `pub fn encode_xcdrN_le`
+    /// and `pub fn max_xcdrN_size` methods on `impl T {}`. For `@final` or
+    /// default structs the top-level in `generate_struct_with_module` calls
+    /// this twice, once per version in [`super::helpers::VERSIONS_TO_EMIT`].
+    /// For `@mutable` and compact-mutable structs (PL_CDR2 wire format) the
+    /// top-level calls it once with `CdrVersion::Xcdr2`, because `@mutable`
+    /// XCDR1 (full PL_CDR v1) is explicitly out of scope of the WIP. The
+    /// `Cdr2Encode` trait delegator is emitted separately via
+    /// [`Self::emit_cdr_trait_delegator`].
     pub(super) fn emit_cdr2_encode_impl(
         s: &Struct,
         enum_names: &[&str],
         version: CdrVersion,
     ) -> String {
         if super::helpers::is_compact_mutable_struct(s) {
-            return Self::emit_pl_cdr2_compact_encode_impl(s);
+            return Self::emit_pl_cdr2_compact_encode_impl(s, version);
         }
 
         if super::helpers::is_mutable_struct(s) {
@@ -239,15 +241,21 @@ impl RustGenerator {
     ///
     /// Layout (per member):
     ///   `EMHEADER1` (LC based on fixed size, no `NEXTINT`) + payload bytes
-    fn emit_pl_cdr2_compact_encode_impl(s: &Struct) -> String {
+    ///
+    /// Always emitted as `encode_xcdr2_le`: `@mutable` XCDR1 (PL_CDR v1 with
+    /// PID/length pairs) is explicitly out-of-scope of the current WIP. The
+    /// `version` parameter therefore only controls function naming and is
+    /// forced to `Xcdr2` by the top-level dispatch in `structs.rs`.
+    fn emit_pl_cdr2_compact_encode_impl(s: &Struct, version: CdrVersion) -> String {
         let mut code = String::new();
+        let suffix = super::helpers::xcdr_method_suffix(version);
 
+        push_fmt(&mut code, format_args!("impl {} {{\n", s.name));
         push_fmt(
             &mut code,
-            format_args!("impl Cdr2Encode for {} {{\n", s.name),
-        );
-        code.push_str(
-            "    fn encode_cdr2_le(&self, dst: &mut [u8]) -> Result<usize, CdrError> {\n",
+            format_args!(
+                "    pub fn encode_{suffix}_le(&self, dst: &mut [u8]) -> Result<usize, CdrError> {{\n"
+            ),
         );
         code.push_str("        let mut offset: usize = 0;\n\n");
 
@@ -296,8 +304,11 @@ impl RustGenerator {
         code.push_str("        Ok(offset)\n");
         code.push_str("    }\n\n");
 
-        // max_cdr2_size = sum of EMHEADER1 (4 bytes) + fixed payload per field
-        code.push_str("    fn max_cdr2_size(&self) -> usize {\n");
+        // max size = sum of EMHEADER1 (4 bytes) + fixed payload per field
+        push_fmt(
+            &mut code,
+            format_args!("    pub fn max_{suffix}_size(&self) -> usize {{\n"),
+        );
         let mut size_expr = String::new();
         for field in &s.fields {
             if field.is_non_serialized() {
@@ -319,16 +330,23 @@ impl RustGenerator {
         code
     }
 
+    /// `PL_CDR2` encoder for `@mutable` aggregated types (parameter list with
+    /// `EMHEADER1` + `NEXTINT`, wrapped in a `DHEADER`).
+    ///
+    /// Same scope contract as [`Self::emit_pl_cdr2_compact_encode_impl`]:
+    /// `version` is expected to be `Xcdr2` (the PL_CDR v1 wire format for
+    /// `@mutable` XCDR1 is out of scope of this WIP).
     #[allow(clippy::too_many_lines)]
     fn emit_pl_cdr2_encode_impl(s: &Struct, version: CdrVersion) -> String {
         let mut code = String::new();
+        let suffix = super::helpers::xcdr_method_suffix(version);
 
+        push_fmt(&mut code, format_args!("impl {} {{\n", s.name));
         push_fmt(
             &mut code,
-            format_args!("impl Cdr2Encode for {} {{\n", s.name),
-        );
-        code.push_str(
-            "    fn encode_cdr2_le(&self, dst: &mut [u8]) -> Result<usize, CdrError> {\n",
+            format_args!(
+                "    pub fn encode_{suffix}_le(&self, dst: &mut [u8]) -> Result<usize, CdrError> {{\n"
+            ),
         );
         code.push_str("        let mut offset: usize = 0;\n\n");
         code.push_str("        if dst.len() < 4 { return Err(CdrError::BufferTooSmall); }\n");
@@ -544,7 +562,10 @@ impl RustGenerator {
         code.push_str("        Ok(offset)\n");
         code.push_str("    }\n\n");
 
-        code.push_str("    fn max_cdr2_size(&self) -> usize {\n");
+        push_fmt(
+            &mut code,
+            format_args!("    pub fn max_{suffix}_size(&self) -> usize {{\n"),
+        );
         code.push_str("        let mut size = 4; // DHEADER\n");
         for field in &s.fields {
             if field.is_non_serialized() {

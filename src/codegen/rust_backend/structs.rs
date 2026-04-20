@@ -67,14 +67,25 @@ impl RustGenerator {
         }
 
         push_fmt(&mut output, format_args!("{indent}}}\n\n"));
-        // Etape 2.2-a: non-mutable non-compact structs emit both XCDR v1 and
-        // XCDR v2 inherent encoders/decoders, plus a Cdr2Encode/Cdr2Decode
-        // trait delegator that routes to the primary version selected by the
-        // @data_representation annotation. Mutable / compact-mutable structs
-        // stay on the legacy single-trait-impl path until 2.2-b is landed.
+        // Etape 2.2-a + 2.2-b: every struct emits inherent `encode_xcdrN_le` /
+        // `decode_xcdrN_le` methods and a `Cdr2Encode` / `Cdr2Decode` trait
+        // delegator routing to the primary version chosen by the
+        // `@data_representation` annotation.
+        //
+        // - `@final` / default (non-mutable non-compact): dual emission,
+        //   one call per version in `VERSIONS_TO_EMIT`, delegator targets
+        //   `primary_version` (XCDR1 / PLAIN_CDR -> Xcdr1, otherwise Xcdr2).
+        // - `@mutable` / compact-mutable (PL_CDR2 wire format): single Xcdr2
+        //   emission because PL_CDR v1 is explicitly out of scope of the WIP.
+        //   The delegator target is forced to Xcdr2 here even when the user
+        //   writes `@data_representation(XCDR1)` on a mutable struct -- we
+        //   have no valid wire encoder for that combination. A future
+        //   Etape 2.2-e (or later validation pass) should reject that
+        //   annotation at parse time.
         if super::helpers::is_mutable_struct(s) || super::helpers::is_compact_mutable_struct(s) {
-            output.push_str(&Self::emit_cdr2_encode_impl(s, enum_names, CdrVersion::Xcdr1));
-            output.push_str(&Self::emit_cdr2_decode_impl(s, enum_names, CdrVersion::Xcdr1));
+            output.push_str(&Self::emit_cdr2_encode_impl(s, enum_names, CdrVersion::Xcdr2));
+            output.push_str(&Self::emit_cdr2_decode_impl(s, enum_names, CdrVersion::Xcdr2));
+            output.push_str(&Self::emit_cdr_trait_delegator(&s.name, CdrVersion::Xcdr2));
         } else {
             let repr = super::helpers::data_representation_annotation(&s.annotations);
             let primary = super::helpers::primary_version(repr.as_deref());

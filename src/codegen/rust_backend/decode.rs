@@ -14,20 +14,20 @@ use crate::types::{IdlType, PrimitiveType};
 impl RustGenerator {
     /// Emit decode methods for a struct.
     ///
-    /// For `@mutable` types, falls through to the PL_CDR2 emitter (still a
-    /// single `impl Cdr2Decode for T` block for Etape 2.2-a -- updated in 2.2-b).
-    /// For `@final` / default structs, emits an inherent `pub fn decode_xcdrN_le`
-    /// method on `impl T {}`. The top-level in `generate_struct_with_module`
-    /// calls this once per version in [`super::helpers::VERSIONS_TO_EMIT`],
-    /// and then emits a `Cdr2Decode` trait delegator through
-    /// [`Self::emit_cdr_trait_delegator`].
+    /// All three dispatch branches now emit an inherent `pub fn decode_xcdrN_le`
+    /// method on `impl T {}`. For `@final` / default structs the top-level in
+    /// `generate_struct_with_module` calls this once per version in
+    /// [`super::helpers::VERSIONS_TO_EMIT`]. For `@mutable` / compact-mutable
+    /// structs the top-level calls it once with `CdrVersion::Xcdr2` (PL_CDR
+    /// v1 is out of scope of the WIP). The `Cdr2Decode` trait delegator is
+    /// emitted separately via [`Self::emit_cdr_trait_delegator`].
     pub(super) fn emit_cdr2_decode_impl(
         s: &Struct,
         enum_names: &[&str],
         version: CdrVersion,
     ) -> String {
         if super::helpers::is_compact_mutable_struct(s) {
-            return Self::emit_pl_cdr2_compact_decode_impl(s);
+            return Self::emit_pl_cdr2_compact_decode_impl(s, version);
         }
 
         if super::helpers::is_mutable_struct(s) {
@@ -245,14 +245,21 @@ impl RustGenerator {
     /// primitive, non-optional fields (e.g., `Point3D`).
     ///
     /// Assumes layout: `[EMHEADER1][payload]...` without inner `DHEADER`.
-    fn emit_pl_cdr2_compact_decode_impl(s: &Struct) -> String {
+    ///
+    /// Always emitted as `decode_xcdr2_le`: `@mutable` XCDR1 (PL_CDR v1) is
+    /// out-of-scope of the current WIP. The `version` parameter is forced to
+    /// `Xcdr2` by the top-level dispatch in `structs.rs`.
+    fn emit_pl_cdr2_compact_decode_impl(s: &Struct, version: CdrVersion) -> String {
         let mut code = String::new();
+        let suffix = super::helpers::xcdr_method_suffix(version);
 
+        push_fmt(&mut code, format_args!("impl {} {{\n", s.name));
         push_fmt(
             &mut code,
-            format_args!("impl Cdr2Decode for {} {{\n", s.name),
+            format_args!(
+                "    pub fn decode_{suffix}_le(src: &[u8]) -> Result<(Self, usize), CdrError> {{\n"
+            ),
         );
-        code.push_str("    fn decode_cdr2_le(src: &[u8]) -> Result<(Self, usize), CdrError> {\n");
         code.push_str("        let mut offset: usize = 0;\n\n");
 
         for field in &s.fields {
@@ -319,15 +326,22 @@ impl RustGenerator {
         code
     }
 
+    /// `PL_CDR2` decoder for `@mutable` aggregated types.
+    ///
+    /// Same scope contract as [`Self::emit_pl_cdr2_compact_decode_impl`]:
+    /// `version` is expected to be `Xcdr2` (PL_CDR v1 is out of scope).
     #[allow(clippy::too_many_lines)]
     fn emit_pl_cdr2_decode_impl(s: &Struct, version: CdrVersion) -> String {
         let mut code = String::new();
+        let suffix = super::helpers::xcdr_method_suffix(version);
 
+        push_fmt(&mut code, format_args!("impl {} {{\n", s.name));
         push_fmt(
             &mut code,
-            format_args!("impl Cdr2Decode for {} {{\n", s.name),
+            format_args!(
+                "    pub fn decode_{suffix}_le(src: &[u8]) -> Result<(Self, usize), CdrError> {{\n"
+            ),
         );
-        code.push_str("    fn decode_cdr2_le(src: &[u8]) -> Result<(Self, usize), CdrError> {\n");
         code.push_str("        if src.len() < 4 { return Err(CdrError::UnexpectedEof); }\n");
         code.push_str("        let payload_len = {\n");
         code.push_str("            let mut tmp = [0u8; 4];\n");
