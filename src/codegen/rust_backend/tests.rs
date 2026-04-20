@@ -650,3 +650,162 @@ fn container_outer_xcdr1_decode_invokes_sub_xcdr1_not_cdr2() -> TestResult<()> {
     );
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// Union routing proof -- Etape 2.2-c
+// ---------------------------------------------------------------------------
+//
+// Verifies that union cases containing a named sub-type invoke the sub-type's
+// matching XCDR method (the critical sites that were flagged in Olivier's
+// 2.2-d review grep: unions.rs:554 encode + :655 decode).
+
+fn make_tagged_union_with_inner() -> IdlFile {
+    let mut file = IdlFile::new();
+    let mut inner = Struct::new("Inner");
+    inner.add_field(Field::new("a", IdlType::Primitive(PrimitiveType::Octet)));
+    inner.add_field(Field::new("b", IdlType::Primitive(PrimitiveType::Double)));
+    file.add_definition(Definition::Struct(inner));
+
+    let mut u = Union::new("TaggedInner", IdlType::Primitive(PrimitiveType::Int32));
+    u.add_case(UnionCase {
+        labels: vec![UnionLabel::Value("0".into())],
+        field: Field::new("nested", IdlType::Named("Inner".into())),
+    });
+    u.add_case(UnionCase {
+        labels: vec![UnionLabel::Value("1".into())],
+        field: Field::new("scalar", IdlType::Primitive(PrimitiveType::Int32)),
+    });
+    file.add_definition(Definition::Union(u));
+    file
+}
+
+#[test]
+fn union_xcdr1_encode_case_named_invokes_sub_xcdr1() -> TestResult<()> {
+    let file = make_tagged_union_with_inner();
+    let r#gen = RustGenerator::new();
+    let out = r#gen.generate(&file)?;
+
+    // Both union versions must exist as inherent methods.
+    assert!(
+        out.contains("impl TaggedInner {\n    pub fn encode_xcdr1_le"),
+        "TaggedInner should emit encode_xcdr1_le"
+    );
+    assert!(
+        out.contains("impl TaggedInner {\n    pub fn encode_xcdr2_le"),
+        "TaggedInner should emit encode_xcdr2_le"
+    );
+    // And the legacy trait delegator.
+    assert!(
+        out.contains("impl Cdr2Encode for TaggedInner"),
+        "TaggedInner should have a Cdr2Encode trait delegator"
+    );
+
+    let xcdr1_start = out
+        .find("impl TaggedInner {\n    pub fn encode_xcdr1_le")
+        .unwrap();
+    let xcdr1_rest = &out[xcdr1_start..];
+    let xcdr1_end = xcdr1_rest.find("\n}\n").unwrap();
+    let xcdr1_body = &xcdr1_rest[..xcdr1_end];
+
+    let xcdr2_start = out
+        .find("impl TaggedInner {\n    pub fn encode_xcdr2_le")
+        .unwrap();
+    let xcdr2_rest = &out[xcdr2_start..];
+    let xcdr2_end = xcdr2_rest.find("\n}\n").unwrap();
+    let xcdr2_body = &xcdr2_rest[..xcdr2_end];
+
+    // Each version's case-encoding of the Inner variant must call the
+    // matching version on the sub-type.
+    assert!(
+        xcdr1_body.contains("v.encode_xcdr1_le("),
+        "TaggedInner::encode_xcdr1_le should invoke v.encode_xcdr1_le(). Body:\n{xcdr1_body}"
+    );
+    assert!(
+        !xcdr1_body.contains("encode_cdr2_le"),
+        "TaggedInner::encode_xcdr1_le must not call legacy encode_cdr2_le. Body:\n{xcdr1_body}"
+    );
+    assert!(
+        xcdr2_body.contains("v.encode_xcdr2_le("),
+        "TaggedInner::encode_xcdr2_le should invoke v.encode_xcdr2_le(). Body:\n{xcdr2_body}"
+    );
+    assert!(
+        !xcdr2_body.contains("encode_cdr2_le"),
+        "TaggedInner::encode_xcdr2_le must not call legacy encode_cdr2_le. Body:\n{xcdr2_body}"
+    );
+    Ok(())
+}
+
+#[test]
+fn union_xcdr1_decode_case_named_invokes_sub_xcdr1() -> TestResult<()> {
+    let file = make_tagged_union_with_inner();
+    let r#gen = RustGenerator::new();
+    let out = r#gen.generate(&file)?;
+
+    let xcdr1_start = out
+        .find("impl TaggedInner {\n    pub fn decode_xcdr1_le")
+        .unwrap();
+    let xcdr1_rest = &out[xcdr1_start..];
+    let xcdr1_end = xcdr1_rest.find("\n}\n").unwrap();
+    let xcdr1_body = &xcdr1_rest[..xcdr1_end];
+
+    let xcdr2_start = out
+        .find("impl TaggedInner {\n    pub fn decode_xcdr2_le")
+        .unwrap();
+    let xcdr2_rest = &out[xcdr2_start..];
+    let xcdr2_end = xcdr2_rest.find("\n}\n").unwrap();
+    let xcdr2_body = &xcdr2_rest[..xcdr2_end];
+
+    assert!(
+        xcdr1_body.contains("Inner::decode_xcdr1_le"),
+        "TaggedInner::decode_xcdr1_le should invoke Inner::decode_xcdr1_le. Body:\n{xcdr1_body}"
+    );
+    assert!(
+        !xcdr1_body.contains("decode_cdr2_le"),
+        "TaggedInner::decode_xcdr1_le must not call legacy decode_cdr2_le. Body:\n{xcdr1_body}"
+    );
+    assert!(
+        xcdr2_body.contains("Inner::decode_xcdr2_le"),
+        "TaggedInner::decode_xcdr2_le should invoke Inner::decode_xcdr2_le. Body:\n{xcdr2_body}"
+    );
+    assert!(
+        !xcdr2_body.contains("decode_cdr2_le"),
+        "TaggedInner::decode_xcdr2_le must not call legacy decode_cdr2_le. Body:\n{xcdr2_body}"
+    );
+    Ok(())
+}
+
+#[test]
+fn enum_emits_dual_inherent_methods_and_trait_delegator() -> TestResult<()> {
+    let mut file = IdlFile::new();
+    let mut e = Enum::new("Color");
+    e.add_variant(EnumVariant::new("Red", None));
+    e.add_variant(EnumVariant::new("Green", None));
+    e.add_variant(EnumVariant::new("Blue", None));
+    file.add_definition(Definition::Enum(e));
+
+    let r#gen = RustGenerator::new();
+    let out = r#gen.generate(&file)?;
+
+    assert!(
+        out.contains("impl Color {\n    pub fn encode_xcdr1_le"),
+        "Color should emit encode_xcdr1_le inherent method"
+    );
+    assert!(
+        out.contains("impl Color {\n    pub fn encode_xcdr2_le"),
+        "Color should emit encode_xcdr2_le inherent method"
+    );
+    assert!(
+        out.contains("impl Color {\n    pub fn decode_xcdr1_le")
+            || out.contains("    pub fn decode_xcdr1_le"),
+        "Color should emit decode_xcdr1_le inherent method"
+    );
+    assert!(
+        out.contains("impl Cdr2Encode for Color"),
+        "Color should emit Cdr2Encode trait delegator"
+    );
+    assert!(
+        out.contains("impl Cdr2Decode for Color"),
+        "Color should emit Cdr2Decode trait delegator"
+    );
+    Ok(())
+}
