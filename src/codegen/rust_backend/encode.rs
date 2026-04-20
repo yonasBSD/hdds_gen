@@ -80,7 +80,7 @@ impl RustGenerator {
                     code.push_str("        offset += padding;\n\n");
                 }
 
-                code.push_str(&Self::emit_encode_field(field));
+                code.push_str(&Self::emit_encode_field(field, version));
             }
         }
 
@@ -137,9 +137,9 @@ impl RustGenerator {
         code
     }
 
-    fn emit_encode_field(field: &Field) -> String {
+    fn emit_encode_field(field: &Field, version: CdrVersion) -> String {
         let mut code = String::new();
-        Self::append_encode_field(&mut code, field);
+        Self::append_encode_field(&mut code, field, version);
         code
     }
 
@@ -224,9 +224,14 @@ impl RustGenerator {
                 Self::encode_string_expr(&mut code, "            ", "value");
             }
             _ => {
-                // Named, Sequence, Array, Map - delegate to Cdr2Encode
-                code.push_str(
-                    "            let used = value.encode_cdr2_le(&mut dst[offset..])?;\n",
+                // Named, Sequence, Array, Map - delegate to the versioned
+                // inherent encoder emitted on the sub-type by this codegen.
+                let suffix = super::helpers::xcdr_method_suffix(version);
+                push_fmt(
+                    &mut code,
+                    format_args!(
+                        "            let used = value.encode_{suffix}_le(&mut dst[offset..])?;\n"
+                    ),
                 );
                 code.push_str("            offset += used;\n\n");
             }
@@ -424,6 +429,7 @@ impl RustGenerator {
                             &ident,
                             field.is_optional(),
                             "        ",
+                            version,
                         ));
                     } else {
                         code.push_str(&Self::encode_primitive_compact(
@@ -470,8 +476,11 @@ impl RustGenerator {
                             Self::encode_buffer_check(&mut code, "            ", "4");
                             code.push_str("            let elem_start = offset;\n");
                             code.push_str("            offset += 4; // DHEADER per element\n");
-                            code.push_str(
-                                "            let used = elem.encode_cdr2_le(&mut dst[offset..])?;\n",
+                            push_fmt(
+                                &mut code,
+                                format_args!(
+                                    "            let used = elem.encode_{suffix}_le(&mut dst[offset..])?;\n"
+                                ),
                             );
                             code.push_str("            offset += used;\n");
                             code.push_str("            let elem_len = u32::try_from(offset - (elem_start + 4)).map_err(|_| CdrError::InvalidEncoding)?;\n");
@@ -488,7 +497,7 @@ impl RustGenerator {
                             push_fmt(
                                 &mut code,
                                 format_args!(
-                                    "        let used = {value_expr}.encode_cdr2_le(&mut dst[offset..])?;\n",
+                                    "        let used = {value_expr}.encode_{suffix}_le(&mut dst[offset..])?;\n",
                                     value_expr = value_expr
                                 ),
                             );
@@ -503,7 +512,7 @@ impl RustGenerator {
                         push_fmt(
                             &mut code,
                             format_args!(
-                                "        let used = {value_expr}.encode_cdr2_le(&mut dst[offset..])?;\n",
+                                "        let used = {value_expr}.encode_{suffix}_le(&mut dst[offset..])?;\n",
                                 value_expr = value_expr
                             ),
                         );
@@ -531,7 +540,7 @@ impl RustGenerator {
                     push_fmt(
                         &mut code,
                         format_args!(
-                            "        let used = {value_expr}.encode_cdr2_le(&mut dst[offset..])?;\n",
+                            "        let used = {value_expr}.encode_{suffix}_le(&mut dst[offset..])?;\n",
                             value_expr = value_expr
                         ),
                     );
@@ -606,7 +615,7 @@ impl RustGenerator {
         code
     }
 
-    fn append_encode_field(dst: &mut String, field: &Field) {
+    fn append_encode_field(dst: &mut String, field: &Field, version: CdrVersion) {
         let fname = super::super::keywords::rust_ident(&field.name);
         match &field.field_type {
             IdlType::Primitive(p) => Self::append_encode_primitive(dst, &fname, p),
@@ -618,27 +627,32 @@ impl RustGenerator {
                 ) {
                     Self::append_encode_primitive(dst, &fname, &PrimitiveType::String);
                 } else {
-                    Self::append_encode_sequence(dst, &fname, inner);
+                    Self::append_encode_sequence(dst, &fname, inner, version);
                 }
             }
             IdlType::Array { inner, size } => {
-                Self::append_encode_array(dst, &fname, inner, *size);
+                Self::append_encode_array(dst, &fname, inner, *size, version);
             }
             IdlType::Map { key, value, .. } => {
-                Self::append_encode_map(dst, &fname, key, value);
+                Self::append_encode_map(dst, &fname, key, value, version);
             }
-            IdlType::Named(name) => Self::append_encode_named(dst, &fname, name),
+            IdlType::Named(name) => Self::append_encode_named(dst, &fname, name, version),
         }
     }
 
-    /// Inline primitive encoder for `PL_CDR2` (avoids calling `encode_cdr2_le` on primitives).
+    /// Inline primitive encoder for `PL_CDR2` (avoids calling the full
+    /// encode entry point on primitives). For string/wstring/Fixed the
+    /// inline path delegates back to the sub-type's versioned encoder, so
+    /// a `version: CdrVersion` parameter is threaded through.
     #[allow(clippy::too_many_lines)]
     fn encode_primitive_inline(
         p: &PrimitiveType,
         field_name: &str,
         is_optional: bool,
         indent: &str,
+        version: CdrVersion,
     ) -> String {
+        let suffix = super::helpers::xcdr_method_suffix(version);
         let mut out = String::new();
         match p {
             PrimitiveType::Octet
@@ -766,7 +780,7 @@ impl RustGenerator {
                 push_fmt(
                     &mut out,
                     format_args!(
-                        "{indent}let used = {expr}.encode_cdr2_le(&mut dst[offset..])?;\n"
+                        "{indent}let used = {expr}.encode_{suffix}_le(&mut dst[offset..])?;\n"
                     ),
                 );
                 push_fmt(&mut out, format_args!("{indent}offset += used;\n\n"));
@@ -1028,7 +1042,13 @@ impl RustGenerator {
         dst.push_str("        // nothing to encode\n\n");
     }
 
-    fn append_encode_named(dst: &mut String, field_name: &str, type_name: &str) {
+    fn append_encode_named(
+        dst: &mut String,
+        field_name: &str,
+        type_name: &str,
+        version: CdrVersion,
+    ) {
+        let suffix = super::helpers::xcdr_method_suffix(version);
         push_fmt(
             dst,
             format_args!("        // Encode named field '{field_name}' of type '{type_name}'\n"),
@@ -1036,7 +1056,7 @@ impl RustGenerator {
         push_fmt(
             dst,
             format_args!(
-                "        let used = self.{field_name}.encode_cdr2_le(&mut dst[offset..])?;\n"
+                "        let used = self.{field_name}.encode_{suffix}_le(&mut dst[offset..])?;\n"
             ),
         );
         dst.push_str("        offset += used;\n\n");

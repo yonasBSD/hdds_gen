@@ -520,3 +520,133 @@ fn cdr2_alignment_legacy_alias_matches_xcdr1() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// Container routing proof — Etape 2.2-d
+// ---------------------------------------------------------------------------
+//
+// Verifies that the transitional bug documented in 2.2-a is fixed by 2.2-d:
+// when `Outer.encode_xcdr1_le` serializes a `sequence<Inner>` field, the
+// per-element loop must invoke `elem.encode_xcdr1_le(...)` (not
+// `elem.encode_cdr2_le(...)` which would delegate to `elem.encode_xcdr2_le`
+// via the sub-type's trait impl).
+
+fn make_outer_with_inner_sequence() -> IdlFile {
+    let mut file = IdlFile::new();
+    let mut inner = Struct::new("Inner");
+    inner.add_field(Field::new("a", IdlType::Primitive(PrimitiveType::Octet)));
+    inner.add_field(Field::new("b", IdlType::Primitive(PrimitiveType::Double)));
+    file.add_definition(Definition::Struct(inner));
+
+    let mut outer = Struct::new("Outer");
+    outer.add_field(Field::new(
+        "items",
+        IdlType::Sequence {
+            inner: Box::new(IdlType::Named("Inner".into())),
+            bound: None,
+        },
+    ));
+    file.add_definition(Definition::Struct(outer));
+    file
+}
+
+#[test]
+fn container_outer_xcdr1_body_invokes_sub_xcdr1_not_cdr2() -> TestResult<()> {
+    let file = make_outer_with_inner_sequence();
+    let r#gen = RustGenerator::new();
+    let out = r#gen.generate(&file)?;
+
+    // Sanity: both versions of the inner encoder must exist.
+    assert!(
+        out.contains("pub fn encode_xcdr1_le"),
+        "Inner should emit encode_xcdr1_le"
+    );
+    assert!(
+        out.contains("pub fn encode_xcdr2_le"),
+        "Inner should emit encode_xcdr2_le"
+    );
+
+    // Slice the two encoder bodies for the Outer type.
+    let xcdr1_start = out
+        .find("impl Outer {\n    pub fn encode_xcdr1_le")
+        .expect("Outer::encode_xcdr1_le block present");
+    let xcdr1_rest = &out[xcdr1_start..];
+    let xcdr1_end = xcdr1_rest
+        .find("\n}\n")
+        .expect("closing brace of Outer::encode_xcdr1_le found");
+    let xcdr1_body = &xcdr1_rest[..xcdr1_end];
+
+    let xcdr2_start = out
+        .find("impl Outer {\n    pub fn encode_xcdr2_le")
+        .expect("Outer::encode_xcdr2_le block present");
+    let xcdr2_rest = &out[xcdr2_start..];
+    let xcdr2_end = xcdr2_rest
+        .find("\n}\n")
+        .expect("closing brace of Outer::encode_xcdr2_le found");
+    let xcdr2_body = &xcdr2_rest[..xcdr2_end];
+
+    // The XCDR1 body must call the XCDR1 sub-encoder, never the legacy one.
+    assert!(
+        xcdr1_body.contains("elem.encode_xcdr1_le("),
+        "Outer::encode_xcdr1_le should invoke elem.encode_xcdr1_le(). Body:\n{xcdr1_body}"
+    );
+    assert!(
+        !xcdr1_body.contains("encode_cdr2_le"),
+        "Outer::encode_xcdr1_le must not call the legacy encode_cdr2_le. Body:\n{xcdr1_body}"
+    );
+
+    // Same contract for the XCDR2 body.
+    assert!(
+        xcdr2_body.contains("elem.encode_xcdr2_le("),
+        "Outer::encode_xcdr2_le should invoke elem.encode_xcdr2_le(). Body:\n{xcdr2_body}"
+    );
+    assert!(
+        !xcdr2_body.contains("encode_cdr2_le"),
+        "Outer::encode_xcdr2_le must not call the legacy encode_cdr2_le. Body:\n{xcdr2_body}"
+    );
+    Ok(())
+}
+
+#[test]
+fn container_outer_xcdr1_decode_invokes_sub_xcdr1_not_cdr2() -> TestResult<()> {
+    let file = make_outer_with_inner_sequence();
+    let r#gen = RustGenerator::new();
+    let out = r#gen.generate(&file)?;
+
+    let xcdr1_start = out
+        .find("impl Outer {\n    pub fn decode_xcdr1_le")
+        .expect("Outer::decode_xcdr1_le block present");
+    let xcdr1_rest = &out[xcdr1_start..];
+    let xcdr1_end = xcdr1_rest
+        .find("\n}\n")
+        .expect("closing brace of Outer::decode_xcdr1_le found");
+    let xcdr1_body = &xcdr1_rest[..xcdr1_end];
+
+    let xcdr2_start = out
+        .find("impl Outer {\n    pub fn decode_xcdr2_le")
+        .expect("Outer::decode_xcdr2_le block present");
+    let xcdr2_rest = &out[xcdr2_start..];
+    let xcdr2_end = xcdr2_rest
+        .find("\n}\n")
+        .expect("closing brace of Outer::decode_xcdr2_le found");
+    let xcdr2_body = &xcdr2_rest[..xcdr2_end];
+
+    assert!(
+        xcdr1_body.contains("Inner>::decode_xcdr1_le"),
+        "Outer::decode_xcdr1_le should invoke <Inner>::decode_xcdr1_le. Body:\n{xcdr1_body}"
+    );
+    assert!(
+        !xcdr1_body.contains("decode_cdr2_le"),
+        "Outer::decode_xcdr1_le must not call legacy decode_cdr2_le. Body:\n{xcdr1_body}"
+    );
+
+    assert!(
+        xcdr2_body.contains("Inner>::decode_xcdr2_le"),
+        "Outer::decode_xcdr2_le should invoke <Inner>::decode_xcdr2_le. Body:\n{xcdr2_body}"
+    );
+    assert!(
+        !xcdr2_body.contains("decode_cdr2_le"),
+        "Outer::decode_xcdr2_le must not call legacy decode_cdr2_le. Body:\n{xcdr2_body}"
+    );
+    Ok(())
+}

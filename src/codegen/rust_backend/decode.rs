@@ -81,7 +81,7 @@ impl RustGenerator {
                     code.push_str("        offset += padding;\n\n");
                 }
 
-                code.push_str(&Self::emit_decode_field(field));
+                code.push_str(&Self::emit_decode_field(field, version));
             }
         }
 
@@ -112,9 +112,9 @@ impl RustGenerator {
 
     /// Emit field decoding logic
     #[must_use]
-    fn emit_decode_field(field: &Field) -> String {
+    fn emit_decode_field(field: &Field, version: CdrVersion) -> String {
         let mut code = String::new();
-        Self::append_decode_field(&mut code, field);
+        Self::append_decode_field(&mut code, field, version);
         code
     }
 
@@ -220,12 +220,14 @@ impl RustGenerator {
                 code.push_str("            Some(__hdds_s.to_string())\n");
             }
             _ => {
-                // Named, Sequence, Array, Map - delegate to Cdr2Decode
+                // Named, Sequence, Array, Map - delegate to the versioned
+                // inherent decoder emitted on the sub-type by this codegen.
                 let ty = Self::type_to_rust(&field.field_type);
+                let suffix = super::helpers::xcdr_method_suffix(version);
                 push_fmt(
                     &mut code,
                     format_args!(
-                        "            let (__hdds_val, __hdds_used) = <{ty}>::decode_cdr2_le(&src[offset..])?;\n"
+                        "            let (__hdds_val, __hdds_used) = <{ty}>::decode_{suffix}_le(&src[offset..])?;\n"
                     ),
                 );
                 code.push_str("            offset += __hdds_used;\n");
@@ -499,7 +501,7 @@ impl RustGenerator {
                             push_fmt(
                                 &mut code,
                                 format_args!(
-                                    "                        let (elem, used) = <{elem_ty}>::decode_cdr2_le(&src[offset..])?;\n"
+                                    "                        let (elem, used) = <{elem_ty}>::decode_{suffix}_le(&src[offset..])?;\n"
                                 ),
                             );
                             code.push_str("                        let advance = usize::min(elem_len, used);\n");
@@ -512,7 +514,7 @@ impl RustGenerator {
                             push_fmt(
                                 &mut code,
                                 format_args!(
-                                    "                    let (value_decoded, used) = <{ty}>::decode_cdr2_le(&src[offset..])?;\n",
+                                    "                    let (value_decoded, used) = <{ty}>::decode_{suffix}_le(&src[offset..])?;\n",
                                 ),
                             );
                             code.push_str("                    let advance = usize::min(member_end - offset, used);\n");
@@ -523,7 +525,7 @@ impl RustGenerator {
                         push_fmt(
                             &mut code,
                             format_args!(
-                                "                    let (value_decoded, used) = <{ty}>::decode_cdr2_le(&src[offset..])?;\n",
+                                "                    let (value_decoded, used) = <{ty}>::decode_{suffix}_le(&src[offset..])?;\n",
                             ),
                         );
                         code.push_str("                    let advance = usize::min(member_end - offset, used);\n");
@@ -535,7 +537,7 @@ impl RustGenerator {
                     push_fmt(
                         &mut code,
                         format_args!(
-                            "                    let (value_decoded, used) = <{ty}>::decode_cdr2_le(&src[offset..])?;\n",
+                            "                    let (value_decoded, used) = <{ty}>::decode_{suffix}_le(&src[offset..])?;\n",
                         ),
                     );
                     code.push_str("                    let advance = usize::min(member_end - offset, used);\n");
@@ -603,7 +605,7 @@ impl RustGenerator {
         code
     }
 
-    fn append_decode_field(dst: &mut String, field: &Field) {
+    fn append_decode_field(dst: &mut String, field: &Field, version: CdrVersion) {
         let ident = super::super::keywords::rust_ident(&field.name);
         match &field.field_type {
             IdlType::Primitive(p) => Self::append_decode_primitive(dst, &ident, p),
@@ -615,16 +617,16 @@ impl RustGenerator {
                 ) {
                     Self::append_decode_primitive(dst, &ident, &PrimitiveType::String);
                 } else {
-                    Self::append_decode_sequence(dst, &ident, inner);
+                    Self::append_decode_sequence(dst, &ident, inner, version);
                 }
             }
             IdlType::Array { inner, size } => {
-                Self::append_decode_array(dst, &ident, inner, *size);
+                Self::append_decode_array(dst, &ident, inner, *size, version);
             }
             IdlType::Map { key, value, .. } => {
-                Self::append_decode_map(dst, &ident, key, value);
+                Self::append_decode_map(dst, &ident, key, value, version);
             }
-            IdlType::Named(name) => Self::append_decode_named(dst, &ident, name),
+            IdlType::Named(name) => Self::append_decode_named(dst, &ident, name, version),
         }
     }
 
@@ -775,7 +777,13 @@ impl RustGenerator {
         push_fmt(dst, format_args!("        let {field_name} = ();\n\n"));
     }
 
-    fn append_decode_named(dst: &mut String, field_name: &str, type_name: &str) {
+    fn append_decode_named(
+        dst: &mut String,
+        field_name: &str,
+        type_name: &str,
+        version: CdrVersion,
+    ) {
+        let suffix = super::helpers::xcdr_method_suffix(version);
         push_fmt(
             dst,
             format_args!("        // Decode named field '{field_name}' of type '{type_name}'\n"),
@@ -783,7 +791,7 @@ impl RustGenerator {
         push_fmt(
             dst,
             format_args!(
-                "        let ({field_name}, __used) = <{type_name}>::decode_cdr2_le(&src[offset..])?;\n"
+                "        let ({field_name}, __used) = <{type_name}>::decode_{suffix}_le(&src[offset..])?;\n"
             ),
         );
         dst.push_str("        offset += __used;\n\n");
