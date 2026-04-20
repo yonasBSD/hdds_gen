@@ -7,7 +7,7 @@
 //! with `Cdr2Encode`/`Cdr2Decode` implementations.
 
 use super::helpers::to_pascal_case;
-use super::{push_fmt, RustGenerator};
+use super::{push_fmt, CdrVersion, RustGenerator};
 use crate::ast::{Union, UnionCase, UnionLabel};
 use crate::types::{Annotation, IdlType, PrimitiveType};
 
@@ -89,11 +89,14 @@ impl RustGenerator {
             push_fmt(&mut output, format_args!("{indent}}}\n\n"));
         }
 
-        // Generate Cdr2Encode impl
-        output.push_str(&Self::emit_union_encode(u, &indent));
+        // Generate Cdr2Encode impl. Etape 2.2 commit 1 threads CdrVersion
+        // through the emit chain; top-level passes Xcdr1 to preserve the
+        // pre-refactor behaviour. Etape 2.2 commit 2 will change this to
+        // read @data_representation and emit for the right version(s).
+        output.push_str(&Self::emit_union_encode(u, &indent, CdrVersion::Xcdr1));
 
         // Generate Cdr2Decode impl
-        output.push_str(&Self::emit_union_decode(u, &indent));
+        output.push_str(&Self::emit_union_decode(u, &indent, CdrVersion::Xcdr1));
 
         output
     }
@@ -128,7 +131,7 @@ impl RustGenerator {
     }
 
     /// Generate `Cdr2Encode` implementation for a union
-    fn emit_union_encode(u: &Union, indent: &str) -> String {
+    fn emit_union_encode(u: &Union, indent: &str, version: CdrVersion) -> String {
         let mut code = String::new();
         let name = &u.name;
 
@@ -201,7 +204,8 @@ impl RustGenerator {
             );
 
             // Encode value
-            let value_encode = Self::emit_union_value_encode(&case.field.field_type, "v", indent);
+            let value_encode =
+                Self::emit_union_value_encode(&case.field.field_type, "v", indent, version);
             code.push_str(&value_encode);
 
             push_fmt(&mut code, format_args!("{indent}            }}\n"));
@@ -241,7 +245,7 @@ impl RustGenerator {
     }
 
     /// Generate `Cdr2Decode` implementation for a union
-    fn emit_union_decode(u: &Union, indent: &str) -> String {
+    fn emit_union_decode(u: &Union, indent: &str, version: CdrVersion) -> String {
         let mut code = String::new();
         let name = &u.name;
 
@@ -328,7 +332,8 @@ impl RustGenerator {
             }
 
             // Decode value
-            let value_decode = Self::emit_union_value_decode(&case.field.field_type, indent);
+            let value_decode =
+                Self::emit_union_value_decode(&case.field.field_type, indent, version);
             code.push_str(&value_decode);
             push_fmt(
                 &mut code,
@@ -509,9 +514,14 @@ impl RustGenerator {
     }
 
     /// Emit encode code for a union value
-    fn emit_union_value_encode(ty: &IdlType, var: &str, indent: &str) -> String {
+    fn emit_union_value_encode(
+        ty: &IdlType,
+        var: &str,
+        indent: &str,
+        version: CdrVersion,
+    ) -> String {
         let mut code = String::new();
-        let alignment = Self::cdr2_alignment(ty);
+        let alignment = Self::xcdr_alignment(ty, version);
 
         if alignment > 1 {
             push_fmt(
@@ -572,8 +582,12 @@ impl RustGenerator {
                     &mut code,
                     format_args!("{indent}                for item in {var}.iter() {{\n"),
                 );
-                let inner_encode =
-                    Self::emit_union_value_encode(inner, "item", &format!("{indent}    "));
+                let inner_encode = Self::emit_union_value_encode(
+                    inner,
+                    "item",
+                    &format!("{indent}    "),
+                    version,
+                );
                 code.push_str(&inner_encode);
                 push_fmt(&mut code, format_args!("{indent}                }}\n"));
             }
@@ -586,6 +600,7 @@ impl RustGenerator {
                     inner,
                     &format!("&{var}[i]"),
                     &format!("{indent}    "),
+                    version,
                 );
                 code.push_str(&inner_encode);
                 push_fmt(&mut code, format_args!("{indent}                }}\n"));
@@ -604,9 +619,9 @@ impl RustGenerator {
     }
 
     /// Emit decode code for a union value
-    fn emit_union_value_decode(ty: &IdlType, indent: &str) -> String {
+    fn emit_union_value_decode(ty: &IdlType, indent: &str, version: CdrVersion) -> String {
         let mut code = String::new();
-        let alignment = Self::cdr2_alignment(ty);
+        let alignment = Self::xcdr_alignment(ty, version);
 
         if alignment > 1 {
             push_fmt(
@@ -670,7 +685,8 @@ impl RustGenerator {
                     &mut code,
                     format_args!("{indent}                for _ in 0..len {{\n"),
                 );
-                let inner_decode = Self::emit_union_value_decode(inner, &format!("{indent}    "));
+                let inner_decode =
+                    Self::emit_union_value_decode(inner, &format!("{indent}    "), version);
                 // Extract just the val assignment from inner decode
                 code.push_str(&inner_decode.replace("let val", "let item"));
                 push_fmt(

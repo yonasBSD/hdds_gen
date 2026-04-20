@@ -7,19 +7,23 @@
 
 #![allow(clippy::uninlined_format_args)]
 
-use super::{push_fmt, RustGenerator};
+use super::{push_fmt, CdrVersion, RustGenerator};
 use crate::ast::{Field, Struct};
 use crate::types::{IdlType, PrimitiveType};
 
 impl RustGenerator {
     /// Emit `Cdr2Decode` trait implementation
-    pub(super) fn emit_cdr2_decode_impl(s: &Struct, enum_names: &[&str]) -> String {
+    pub(super) fn emit_cdr2_decode_impl(
+        s: &Struct,
+        enum_names: &[&str],
+        version: CdrVersion,
+    ) -> String {
         if super::helpers::is_compact_mutable_struct(s) {
             return Self::emit_pl_cdr2_compact_decode_impl(s);
         }
 
         if super::helpers::is_mutable_struct(s) {
-            return Self::emit_pl_cdr2_decode_impl(s);
+            return Self::emit_pl_cdr2_decode_impl(s, version);
         }
 
         let mut code = String::new();
@@ -37,15 +41,15 @@ impl RustGenerator {
                 continue;
             }
             if field.is_optional() {
-                code.push_str(&Self::emit_optional_field_decode(field));
+                code.push_str(&Self::emit_optional_field_decode(field, version));
             } else {
                 // Named structs self-align their internal fields, so no
-                // outer padding is needed.  Named enums serialize as a
-                // plain integer and DO need the alignment from
-                // cdr2_alignment().
+                // outer padding is needed. Named enums serialize as a
+                // plain integer and DO need the alignment from the
+                // version-aware dispatcher.
                 let alignment = match &field.field_type {
                     IdlType::Named(name) if !enum_names.contains(&name.as_str()) => 1,
-                    _ => Self::cdr2_alignment(&field.field_type),
+                    _ => Self::xcdr_alignment(&field.field_type, version),
                 };
 
                 // Insert padding if needed
@@ -106,11 +110,11 @@ impl RustGenerator {
     /// Decode an `@optional` field in standard CDR2: 1-byte presence flag + value.
     // codegen function - line count from template output
     #[allow(clippy::too_many_lines)]
-    fn emit_optional_field_decode(field: &Field) -> String {
+    fn emit_optional_field_decode(field: &Field, version: CdrVersion) -> String {
         let mut code = String::new();
         let fname = super::super::keywords::rust_ident(&field.name);
         let field_ty = Self::type_to_rust(&field.field_type);
-        let alignment = Self::cdr2_alignment(&field.field_type);
+        let alignment = Self::xcdr_alignment(&field.field_type, version);
 
         // Read presence flag and decode value in a single let-binding (avoids needless_late_init)
         Self::decode_buffer_check(&mut code, "        ", "1");
@@ -305,7 +309,7 @@ impl RustGenerator {
     }
 
     #[allow(clippy::too_many_lines)]
-    fn emit_pl_cdr2_decode_impl(s: &Struct) -> String {
+    fn emit_pl_cdr2_decode_impl(s: &Struct, version: CdrVersion) -> String {
         let mut code = String::new();
 
         push_fmt(
@@ -361,7 +365,7 @@ impl RustGenerator {
             }
             let ident = super::super::keywords::rust_ident(&field.name);
             let member_id = Self::compute_member_id(s, idx, field);
-            let alignment = Self::cdr2_alignment(&field.field_type);
+            let alignment = Self::xcdr_alignment(&field.field_type, version);
 
             push_fmt(
                 &mut code,
@@ -379,7 +383,7 @@ impl RustGenerator {
             // Decode and compute used length by re-encoding
             match &field.field_type {
                 IdlType::Primitive(p) => {
-                    let align = Self::cdr2_alignment(&field.field_type);
+                    let align = Self::xcdr_alignment(&field.field_type, version);
                     let size = Self::cdr2_fixed_size(&field.field_type).unwrap_or(0);
                     push_fmt(
                         &mut code,

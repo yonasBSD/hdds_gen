@@ -6,7 +6,7 @@
 //! Generates Rust struct definitions from IDL struct types.
 
 use super::super::keywords::rust_ident;
-use super::{push_fmt, RustGenerator};
+use super::{push_fmt, CdrVersion, RustGenerator};
 use crate::ast::{Field, Struct};
 use crate::types::{Annotation, IdlType, PrimitiveType};
 
@@ -67,8 +67,12 @@ impl RustGenerator {
         }
 
         push_fmt(&mut output, format_args!("{indent}}}\n\n"));
-        output.push_str(&Self::emit_cdr2_encode_impl(s, enum_names));
-        output.push_str(&Self::emit_cdr2_decode_impl(s, enum_names));
+        // Etape 2.2 commit 1: thread CdrVersion through the emit chain but
+        // keep calling with Xcdr1 to preserve the pre-refactor behaviour.
+        // Etape 2.2 commit 2 will read @data_representation and decide which
+        // version(s) to emit.
+        output.push_str(&Self::emit_cdr2_encode_impl(s, enum_names, CdrVersion::Xcdr1));
+        output.push_str(&Self::emit_cdr2_decode_impl(s, enum_names, CdrVersion::Xcdr1));
         let is_nested = s
             .annotations
             .iter()

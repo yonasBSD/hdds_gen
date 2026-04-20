@@ -14,6 +14,23 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 
+/// CDR encoding version threaded through the codegen pipeline.
+///
+/// XCDR v1 and XCDR v2 share most of their serialization rules but diverge
+/// on the alignment of 8-byte primitives (cf. Phase 0 investigation report
+/// in `crates/hdds/tests/golden/xcdr/INVESTIGATION.md` on the HDDS tree).
+/// The codegen selects the right alignment table and, from Etape 2.2
+/// commit 2 onwards, the right function names and inter-type method
+/// invocations based on this enum.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CdrVersion {
+    /// XCDR v1 per OMG DDS-XTypes v1.3 Section 7.4.1.
+    Xcdr1,
+    /// XCDR v2 per OMG DDS-XTypes v1.3 Section 7.4.2.
+    #[allow(dead_code)] // Wired by top-level emitter in Etape 2.2 commit 2.
+    Xcdr2,
+}
+
 pub(crate) fn push_fmt(dst: &mut String, args: std::fmt::Arguments<'_>) {
     let _ = dst.write_fmt(args);
 }
@@ -313,12 +330,25 @@ impl RustGenerator {
     /// XCDR v2 alignment mandated by the OMG DDS-XTypes v1.3 spec. See
     /// `crates/hdds/tests/golden/xcdr/INVESTIGATION.md` for the full evidence.
     ///
-    /// Phase 2 Etape 2.2 must update every callsite in `encode.rs`,
-    /// `decode.rs`, and `unions.rs` to select explicitly between
-    /// [`Self::xcdr1_alignment`] and [`Self::xcdr2_alignment`] based on the
-    /// target `@data_representation`, and then remove this alias.
+    /// Phase 2 Etape 2.2 commit 2 must remove this alias once every callsite
+    /// has migrated to [`Self::xcdr_alignment`] with an explicit version.
+    #[allow(dead_code)] // Only exercised by `cdr2_alignment_legacy_alias_matches_xcdr1` test; removed in commit 2.
     pub(super) fn cdr2_alignment(idl_type: &IdlType) -> usize {
         Self::xcdr1_alignment(idl_type)
+    }
+
+    /// Version-aware dispatcher introduced in Phase 2 Etape 2.2 commit 1.
+    ///
+    /// Every `emit_*` helper in `encode.rs`, `decode.rs`, and `unions.rs`
+    /// receives a [`CdrVersion`] parameter and funnels through this
+    /// dispatcher instead of calling the version-specific tables directly.
+    /// Flipping the caller's target version therefore automatically reroutes
+    /// the whole alignment chain.
+    pub(super) fn xcdr_alignment(idl_type: &IdlType, version: CdrVersion) -> usize {
+        match version {
+            CdrVersion::Xcdr1 => Self::xcdr1_alignment(idl_type),
+            CdrVersion::Xcdr2 => Self::xcdr2_alignment(idl_type),
+        }
     }
 
     /// Calculate fixed size for primitives (None for variable-size types)

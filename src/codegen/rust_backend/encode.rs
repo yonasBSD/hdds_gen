@@ -7,18 +7,22 @@
 
 #![allow(clippy::uninlined_format_args)]
 
-use super::{push_fmt, RustGenerator};
+use super::{push_fmt, CdrVersion, RustGenerator};
 use crate::ast::{Field, Struct};
 use crate::types::{IdlType, PrimitiveType};
 
 impl RustGenerator {
-    pub(super) fn emit_cdr2_encode_impl(s: &Struct, enum_names: &[&str]) -> String {
+    pub(super) fn emit_cdr2_encode_impl(
+        s: &Struct,
+        enum_names: &[&str],
+        version: CdrVersion,
+    ) -> String {
         if super::helpers::is_compact_mutable_struct(s) {
             return Self::emit_pl_cdr2_compact_encode_impl(s);
         }
 
         if super::helpers::is_mutable_struct(s) {
-            return Self::emit_pl_cdr2_encode_impl(s);
+            return Self::emit_pl_cdr2_encode_impl(s, version);
         }
 
         let mut code = String::new();
@@ -37,15 +41,15 @@ impl RustGenerator {
                 continue;
             }
             if field.is_optional() {
-                code.push_str(&Self::emit_optional_field_encode(field));
+                code.push_str(&Self::emit_optional_field_encode(field, version));
             } else {
                 // Named structs self-align their internal fields, so no
-                // outer padding is needed.  Named enums serialize as a
-                // plain integer and DO need the alignment from
-                // cdr2_alignment().
+                // outer padding is needed. Named enums serialize as a
+                // plain integer and DO need the alignment from the
+                // version-aware dispatcher.
                 let alignment = match &field.field_type {
                     IdlType::Named(name) if !enum_names.contains(&name.as_str()) => 1,
-                    _ => Self::cdr2_alignment(&field.field_type),
+                    _ => Self::xcdr_alignment(&field.field_type, version),
                 };
                 if alignment > 1 {
                     push_fmt(
@@ -85,7 +89,7 @@ impl RustGenerator {
                 size_expr.push_str("1 + ");
             }
 
-            let alignment = Self::cdr2_alignment(&field.field_type);
+            let alignment = Self::xcdr_alignment(&field.field_type, version);
             if alignment > 1 {
                 push_fmt(&mut size_expr, format_args!("{} + ", alignment - 1));
             }
@@ -125,10 +129,10 @@ impl RustGenerator {
     }
 
     /// Encode an `@optional` field in standard CDR2: 1-byte presence flag + value.
-    fn emit_optional_field_encode(field: &Field) -> String {
+    fn emit_optional_field_encode(field: &Field, version: CdrVersion) -> String {
         let mut code = String::new();
         let fname = super::super::keywords::rust_ident(&field.name);
-        let alignment = Self::cdr2_alignment(&field.field_type);
+        let alignment = Self::xcdr_alignment(&field.field_type, version);
 
         // Boolean presence flag (1 byte)
         Self::encode_buffer_check(&mut code, "        ", "1");
@@ -303,7 +307,7 @@ impl RustGenerator {
     }
 
     #[allow(clippy::too_many_lines)]
-    fn emit_pl_cdr2_encode_impl(s: &Struct) -> String {
+    fn emit_pl_cdr2_encode_impl(s: &Struct, version: CdrVersion) -> String {
         let mut code = String::new();
 
         push_fmt(
@@ -321,7 +325,7 @@ impl RustGenerator {
             if field.is_non_serialized() {
                 continue;
             }
-            let alignment = Self::cdr2_alignment(&field.field_type);
+            let alignment = Self::xcdr_alignment(&field.field_type, version);
             let member_id = Self::compute_member_id(s, idx, field);
             let ident = super::super::keywords::rust_ident(&field.name);
 
@@ -534,7 +538,7 @@ impl RustGenerator {
                 continue;
             }
             let ident = super::super::keywords::rust_ident(&field.name);
-            let alignment = Self::cdr2_alignment(&field.field_type);
+            let alignment = Self::xcdr_alignment(&field.field_type, version);
             let pad = alignment.saturating_sub(1);
             let add = match &field.field_type {
                 IdlType::Primitive(p) => {
