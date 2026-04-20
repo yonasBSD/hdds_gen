@@ -12,6 +12,15 @@ use crate::ast::{Field, Struct};
 use crate::types::{IdlType, PrimitiveType};
 
 impl RustGenerator {
+    /// Emit encode methods for a struct.
+    ///
+    /// For `@mutable` types, falls through to the PL_CDR2 emitter (still a
+    /// single `impl Cdr2Encode for T` block for Etape 2.2-a -- updated in 2.2-b).
+    /// For `@final` / default structs, emits inherent `pub fn encode_xcdrN_le`
+    /// and `pub fn max_xcdrN_size` methods on `impl T {}`. The top-level in
+    /// `generate_struct_with_module` calls this twice, once per version in
+    /// [`super::helpers::VERSIONS_TO_EMIT`], and then emits a trait delegator
+    /// through [`Self::emit_cdr_trait_delegator`].
     pub(super) fn emit_cdr2_encode_impl(
         s: &Struct,
         enum_names: &[&str],
@@ -26,13 +35,14 @@ impl RustGenerator {
         }
 
         let mut code = String::new();
+        let suffix = super::helpers::xcdr_method_suffix(version);
 
+        push_fmt(&mut code, format_args!("impl {} {{\n", s.name));
         push_fmt(
             &mut code,
-            format_args!("impl Cdr2Encode for {} {{\n", s.name),
-        );
-        code.push_str(
-            "    fn encode_cdr2_le(&self, dst: &mut [u8]) -> Result<usize, CdrError> {\n",
+            format_args!(
+                "    pub fn encode_{suffix}_le(&self, dst: &mut [u8]) -> Result<usize, CdrError> {{\n"
+            ),
         );
         code.push_str("        let mut offset: usize = 0;\n\n");
 
@@ -75,7 +85,10 @@ impl RustGenerator {
         code.push_str("        Ok(offset)\n");
         code.push_str("    }\n\n");
 
-        code.push_str("    fn max_cdr2_size(&self) -> usize {\n");
+        push_fmt(
+            &mut code,
+            format_args!("    pub fn max_{suffix}_size(&self) -> usize {{\n"),
+        );
         code.push_str("        // Conservative estimate with max padding\n");
 
         let mut size_expr = String::new();

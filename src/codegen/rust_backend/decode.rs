@@ -12,7 +12,15 @@ use crate::ast::{Field, Struct};
 use crate::types::{IdlType, PrimitiveType};
 
 impl RustGenerator {
-    /// Emit `Cdr2Decode` trait implementation
+    /// Emit decode methods for a struct.
+    ///
+    /// For `@mutable` types, falls through to the PL_CDR2 emitter (still a
+    /// single `impl Cdr2Decode for T` block for Etape 2.2-a -- updated in 2.2-b).
+    /// For `@final` / default structs, emits an inherent `pub fn decode_xcdrN_le`
+    /// method on `impl T {}`. The top-level in `generate_struct_with_module`
+    /// calls this once per version in [`super::helpers::VERSIONS_TO_EMIT`],
+    /// and then emits a `Cdr2Decode` trait delegator through
+    /// [`Self::emit_cdr_trait_delegator`].
     pub(super) fn emit_cdr2_decode_impl(
         s: &Struct,
         enum_names: &[&str],
@@ -27,12 +35,15 @@ impl RustGenerator {
         }
 
         let mut code = String::new();
+        let suffix = super::helpers::xcdr_method_suffix(version);
 
+        push_fmt(&mut code, format_args!("impl {} {{\n", s.name));
         push_fmt(
             &mut code,
-            format_args!("impl Cdr2Decode for {} {{\n", s.name),
+            format_args!(
+                "    pub fn decode_{suffix}_le(src: &[u8]) -> Result<(Self, usize), CdrError> {{\n"
+            ),
         );
-        code.push_str("    fn decode_cdr2_le(src: &[u8]) -> Result<(Self, usize), CdrError> {\n");
         code.push_str("        let mut offset: usize = 0;\n\n");
 
         // Decode each field with alignment

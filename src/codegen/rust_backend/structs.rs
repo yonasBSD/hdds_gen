@@ -67,12 +67,23 @@ impl RustGenerator {
         }
 
         push_fmt(&mut output, format_args!("{indent}}}\n\n"));
-        // Etape 2.2 commit 1: thread CdrVersion through the emit chain but
-        // keep calling with Xcdr1 to preserve the pre-refactor behaviour.
-        // Etape 2.2 commit 2 will read @data_representation and decide which
-        // version(s) to emit.
-        output.push_str(&Self::emit_cdr2_encode_impl(s, enum_names, CdrVersion::Xcdr1));
-        output.push_str(&Self::emit_cdr2_decode_impl(s, enum_names, CdrVersion::Xcdr1));
+        // Etape 2.2-a: non-mutable non-compact structs emit both XCDR v1 and
+        // XCDR v2 inherent encoders/decoders, plus a Cdr2Encode/Cdr2Decode
+        // trait delegator that routes to the primary version selected by the
+        // @data_representation annotation. Mutable / compact-mutable structs
+        // stay on the legacy single-trait-impl path until 2.2-b is landed.
+        if super::helpers::is_mutable_struct(s) || super::helpers::is_compact_mutable_struct(s) {
+            output.push_str(&Self::emit_cdr2_encode_impl(s, enum_names, CdrVersion::Xcdr1));
+            output.push_str(&Self::emit_cdr2_decode_impl(s, enum_names, CdrVersion::Xcdr1));
+        } else {
+            let repr = super::helpers::data_representation_annotation(&s.annotations);
+            let primary = super::helpers::primary_version(repr.as_deref());
+            for &version in super::helpers::VERSIONS_TO_EMIT {
+                output.push_str(&Self::emit_cdr2_encode_impl(s, enum_names, version));
+                output.push_str(&Self::emit_cdr2_decode_impl(s, enum_names, version));
+            }
+            output.push_str(&Self::emit_cdr_trait_delegator(&s.name, primary));
+        }
         let is_nested = s
             .annotations
             .iter()

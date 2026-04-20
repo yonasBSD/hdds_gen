@@ -27,9 +27,22 @@ pub(crate) enum CdrVersion {
     /// XCDR v1 per OMG DDS-XTypes v1.3 Section 7.4.1.
     Xcdr1,
     /// XCDR v2 per OMG DDS-XTypes v1.3 Section 7.4.2.
-    #[allow(dead_code)] // Wired by top-level emitter in Etape 2.2 commit 2.
     Xcdr2,
 }
+
+/// All XCDR versions the generator always emits for every non-mutable
+/// non-compact struct (and in later sub-commits also for mutable, compact,
+/// and union types).
+///
+/// Rationale (Olivier's architecture call, 2026-04-20): systematic dual
+/// emission avoids propagating a "target version" through the codegen when
+/// sub-types are invoked. Every generated type carries both
+/// `encode_xcdr1_le` / `encode_xcdr2_le` inherent methods, so a caller
+/// encoding in XCDR v1 context always finds the matching sub-type method
+/// locally. The default wire representation (what `Cdr2Encode::encode_cdr2_le`
+/// maps to) is selected per type by the `@data_representation` annotation via
+/// [`primary_version`].
+pub(super) const VERSIONS_TO_EMIT: &[CdrVersion] = &[CdrVersion::Xcdr1, CdrVersion::Xcdr2];
 
 pub(crate) fn push_fmt(dst: &mut String, args: std::fmt::Arguments<'_>) {
     let _ = dst.write_fmt(args);
@@ -131,6 +144,44 @@ pub(super) fn collect_mutable_types(ast: &IdlFile) -> HashSet<String> {
     let mut set = HashSet::new();
     walk(&ast.definitions, &mut set);
     set
+}
+
+/// Read the `@data_representation("...")` annotation string from a list of
+/// annotations. Returns `None` if absent.
+///
+/// Possible valid values per OMG XTypes v1.3 (checked at parse-time in
+/// `validate/rules/helpers.rs:54`): `"XCDR1"`, `"XCDR2"`, `"PLAIN_CDR"`,
+/// `"PLAIN_CDR2"`.
+pub(super) fn data_representation_annotation(annotations: &[Annotation]) -> Option<String> {
+    annotations.iter().find_map(|a| match a {
+        Annotation::DataRepresentation(val) => Some(val.clone()),
+        _ => None,
+    })
+}
+
+/// Decide which version the legacy `Cdr2Encode` / `Cdr2Decode` trait impls
+/// delegate to, given the type's `@data_representation` annotation.
+///
+/// Both `encode_xcdr1_le` and `encode_xcdr2_le` inherent methods are always
+/// emitted (see [`VERSIONS_TO_EMIT`]); only the default wire representation
+/// exposed through the `Cdr2Encode` trait shifts based on the annotation:
+///
+/// - `@data_representation("XCDR1")` / `("PLAIN_CDR")` -> Xcdr1 delegate
+/// - otherwise -> Xcdr2 delegate (spec-correct default)
+pub(super) fn primary_version(repr: Option<&str>) -> CdrVersion {
+    match repr {
+        Some("XCDR1" | "PLAIN_CDR") => CdrVersion::Xcdr1,
+        _ => CdrVersion::Xcdr2,
+    }
+}
+
+/// Returns the `xcdr1` / `xcdr2` fragment used in generated function names
+/// such as `encode_xcdr1_le` or `max_xcdr2_size`.
+pub(super) fn xcdr_method_suffix(version: CdrVersion) -> &'static str {
+    match version {
+        CdrVersion::Xcdr1 => "xcdr1",
+        CdrVersion::Xcdr2 => "xcdr2",
+    }
 }
 
 pub(super) fn is_mutable_struct(s: &Struct) -> bool {
@@ -349,6 +400,38 @@ impl RustGenerator {
             CdrVersion::Xcdr1 => Self::xcdr1_alignment(idl_type),
             CdrVersion::Xcdr2 => Self::xcdr2_alignment(idl_type),
         }
+    }
+
+    /// Emit `impl Cdr2Encode` / `impl Cdr2Decode` trait implementations that
+    /// delegate to the per-version inherent methods emitted for type `name`.
+    ///
+    /// The delegator preserves the crate's existing `Cdr2Encode` /
+    /// `Cdr2Decode` API while the inherent methods expose both XCDR v1 and
+    /// XCDR v2 encoders. The target of the delegation is the type's
+    /// `@data_representation` annotation (`@XCDR1` -> Xcdr1, otherwise Xcdr2).
+    ///
+    /// This is shared between struct and union codegen (2.2-a emits for
+    /// structs, 2.2-c will emit for unions).
+    pub(super) fn emit_cdr_trait_delegator(name: &str, primary: CdrVersion) -> String {
+        let suffix = super::helpers::xcdr_method_suffix(primary);
+        format!(
+            "impl Cdr2Encode for {name} {{\n\
+             \u{20}   fn encode_cdr2_le(&self, dst: &mut [u8]) -> Result<usize, CdrError> {{\n\
+             \u{20}       self.encode_{suffix}_le(dst)\n\
+             \u{20}   }}\n\
+             \n\
+             \u{20}   fn max_cdr2_size(&self) -> usize {{\n\
+             \u{20}       self.max_{suffix}_size()\n\
+             \u{20}   }}\n\
+             }}\n\
+             \n\
+             impl Cdr2Decode for {name} {{\n\
+             \u{20}   fn decode_cdr2_le(src: &[u8]) -> Result<(Self, usize), CdrError> {{\n\
+             \u{20}       Self::decode_{suffix}_le(src)\n\
+             \u{20}   }}\n\
+             }}\n\
+             \n"
+        )
     }
 
     /// Calculate fixed size for primitives (None for variable-size types)
