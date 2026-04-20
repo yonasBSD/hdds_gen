@@ -328,3 +328,195 @@ fn union_default_case_enum_discriminant() -> TestResult<()> {
     );
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// XCDR alignment tables (Phase 2 Etape 2.1)
+// ---------------------------------------------------------------------------
+//
+// Spec references:
+// - OMG DDS-XTypes v1.3 (formal/2020-02-04) Section 7.4.1.1.1 Table 31
+//   for XCDR v1 (doc page 122).
+// - OMG DDS-XTypes v1.3 Section 7.4.2 + 7.4.3.2.2 Table 37 for XCDR v2
+//   (doc pages 129 and 132).
+//
+// See `crates/hdds/tests/golden/xcdr/INVESTIGATION.md` for the Phase 0
+// investigation that motivated adding xcdr2_alignment().
+
+#[test]
+fn xcdr1_alignment_primitives_match_spec_table_31() {
+    let one_byte = [
+        PrimitiveType::Octet,
+        PrimitiveType::UInt8,
+        PrimitiveType::Int8,
+        PrimitiveType::Boolean,
+        PrimitiveType::Char,
+    ];
+    let two_byte = [
+        PrimitiveType::Short,
+        PrimitiveType::UnsignedShort,
+        PrimitiveType::Int16,
+        PrimitiveType::UInt16,
+    ];
+    let four_byte = [
+        PrimitiveType::Long,
+        PrimitiveType::UnsignedLong,
+        PrimitiveType::Int32,
+        PrimitiveType::UInt32,
+        PrimitiveType::Float,
+        PrimitiveType::WChar,
+        PrimitiveType::String,
+        PrimitiveType::WString,
+    ];
+    let eight_byte = [
+        PrimitiveType::LongLong,
+        PrimitiveType::UnsignedLongLong,
+        PrimitiveType::Int64,
+        PrimitiveType::UInt64,
+        PrimitiveType::Double,
+        PrimitiveType::LongDouble,
+    ];
+
+    for p in &one_byte {
+        assert_eq!(
+            RustGenerator::xcdr1_alignment(&IdlType::Primitive(p.clone())),
+            1,
+            "XCDR1: {p:?} must align to 1"
+        );
+    }
+    for p in &two_byte {
+        assert_eq!(
+            RustGenerator::xcdr1_alignment(&IdlType::Primitive(p.clone())),
+            2,
+            "XCDR1: {p:?} must align to 2"
+        );
+    }
+    for p in &four_byte {
+        assert_eq!(
+            RustGenerator::xcdr1_alignment(&IdlType::Primitive(p.clone())),
+            4,
+            "XCDR1: {p:?} must align to 4"
+        );
+    }
+    for p in &eight_byte {
+        assert_eq!(
+            RustGenerator::xcdr1_alignment(&IdlType::Primitive(p.clone())),
+            8,
+            "XCDR1: {p:?} must align to 8 per Table 31"
+        );
+    }
+}
+
+#[test]
+fn xcdr2_alignment_caps_8_byte_primitives_at_4() {
+    // Per Section 7.4.2: INT64, UINT64, FLOAT64, FLOAT128 align on 4 in XCDR v2.
+    let capped_at_4 = [
+        PrimitiveType::LongLong,
+        PrimitiveType::UnsignedLongLong,
+        PrimitiveType::Int64,
+        PrimitiveType::UInt64,
+        PrimitiveType::Double,
+        PrimitiveType::LongDouble,
+    ];
+    for p in &capped_at_4 {
+        assert_eq!(
+            RustGenerator::xcdr2_alignment(&IdlType::Primitive(p.clone())),
+            4,
+            "XCDR2: {p:?} must cap at 4 per Section 7.4.2 (not 8 as in XCDR1)"
+        );
+    }
+}
+
+#[test]
+fn xcdr2_alignment_matches_xcdr1_for_types_not_larger_than_4_bytes() {
+    // For primitives that align to <= 4 in XCDR1, XCDR2 must return the
+    // same value (the MAXALIGN(VERSION2)=4 cap has no effect at or below 4).
+    let types = [
+        IdlType::Primitive(PrimitiveType::Octet),
+        IdlType::Primitive(PrimitiveType::UInt8),
+        IdlType::Primitive(PrimitiveType::Int8),
+        IdlType::Primitive(PrimitiveType::Boolean),
+        IdlType::Primitive(PrimitiveType::Char),
+        IdlType::Primitive(PrimitiveType::Short),
+        IdlType::Primitive(PrimitiveType::UnsignedShort),
+        IdlType::Primitive(PrimitiveType::Int16),
+        IdlType::Primitive(PrimitiveType::UInt16),
+        IdlType::Primitive(PrimitiveType::Long),
+        IdlType::Primitive(PrimitiveType::UnsignedLong),
+        IdlType::Primitive(PrimitiveType::Int32),
+        IdlType::Primitive(PrimitiveType::UInt32),
+        IdlType::Primitive(PrimitiveType::Float),
+        IdlType::Primitive(PrimitiveType::WChar),
+        IdlType::Primitive(PrimitiveType::String),
+        IdlType::Primitive(PrimitiveType::WString),
+    ];
+    for t in &types {
+        assert_eq!(
+            RustGenerator::xcdr1_alignment(t),
+            RustGenerator::xcdr2_alignment(t),
+            "XCDR1 and XCDR2 must match for {t:?} (alignment <= 4)"
+        );
+    }
+}
+
+#[test]
+fn xcdr_alignment_non_primitive_types_unchanged_between_versions() {
+    // Sequences, maps, and named references align via their u32 length prefix
+    // in both versions.
+    let seq = IdlType::Sequence {
+        inner: Box::new(IdlType::Primitive(PrimitiveType::Double)),
+        bound: None,
+    };
+    let map = IdlType::Map {
+        key: Box::new(IdlType::Primitive(PrimitiveType::Int32)),
+        value: Box::new(IdlType::Primitive(PrimitiveType::Double)),
+        bound: None,
+    };
+    let named = IdlType::Named("MyStruct".to_string());
+    for t in [&seq, &map, &named] {
+        assert_eq!(RustGenerator::xcdr1_alignment(t), 4);
+        assert_eq!(RustGenerator::xcdr2_alignment(t), 4);
+    }
+}
+
+#[test]
+fn xcdr_alignment_array_inherits_from_inner_type() {
+    // Fixed arrays inherit the inner element's alignment, so a double[10]
+    // aligns to 8 in XCDR1 and to 4 in XCDR2.
+    let array_of_double = IdlType::Array {
+        inner: Box::new(IdlType::Primitive(PrimitiveType::Double)),
+        size: 10,
+    };
+    assert_eq!(RustGenerator::xcdr1_alignment(&array_of_double), 8);
+    assert_eq!(RustGenerator::xcdr2_alignment(&array_of_double), 4);
+
+    let array_of_u32 = IdlType::Array {
+        inner: Box::new(IdlType::Primitive(PrimitiveType::UInt32)),
+        size: 4,
+    };
+    assert_eq!(RustGenerator::xcdr1_alignment(&array_of_u32), 4);
+    assert_eq!(RustGenerator::xcdr2_alignment(&array_of_u32), 4);
+}
+
+#[test]
+fn cdr2_alignment_legacy_alias_matches_xcdr1() {
+    // `cdr2_alignment` is a misnomer -- it returns XCDR v1 values. This test
+    // locks that intentional behaviour until Phase 2 Etape 2.2 removes the
+    // alias and updates all callsites.
+    let samples = [
+        IdlType::Primitive(PrimitiveType::Octet),
+        IdlType::Primitive(PrimitiveType::Int32),
+        IdlType::Primitive(PrimitiveType::Double),
+        IdlType::Primitive(PrimitiveType::Int64),
+        IdlType::Sequence {
+            inner: Box::new(IdlType::Primitive(PrimitiveType::Double)),
+            bound: None,
+        },
+    ];
+    for t in &samples {
+        assert_eq!(
+            RustGenerator::cdr2_alignment(t),
+            RustGenerator::xcdr1_alignment(t),
+            "cdr2_alignment must stay a direct alias of xcdr1_alignment: {t:?}"
+        );
+    }
+}

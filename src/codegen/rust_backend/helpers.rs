@@ -204,11 +204,23 @@ impl RustGenerator {
         }
     }
 
-    /// Calculate CDR2 alignment for a given IDL type
+    /// XCDR v1 alignment table per OMG DDS-XTypes v1.3 (formal/2020-02-04).
     ///
-    /// Returns alignment in bytes (1, 2, 4, or 8).
-    /// Primitives align to their natural size, sequences/strings align to 4 (u32 prefix).
-    pub(super) fn cdr2_alignment(idl_type: &IdlType) -> usize {
+    /// Reference: Section 7.4.1.1.1 "Primitive types", Table 31 (doc page 122).
+    ///
+    /// Returns alignment in bytes (1, 2, 4, or 8). Primitives align to their
+    /// natural size, up to 8. Sequences, maps, and named type references align
+    /// to 4 via their `uint32` length prefix.
+    ///
+    /// | Primitive type                                       | Alignment |
+    /// | ---------------------------------------------------- | --------- |
+    /// | `octet`, `bool`, `char`, `int8`, `uint8`             |  1        |
+    /// | `short`, `ushort`, `int16`, `uint16`                 |  2        |
+    /// | `long`, `ulong`, `int32`, `uint32`, `float`, `wchar` |  4        |
+    /// | `string`, `wstring`, `fixed`                         |  4        |
+    /// | `longlong`, `ulonglong`, `int64`, `uint64`           |  8        |
+    /// | `double`, `long double`                              |  8        |
+    pub(super) fn xcdr1_alignment(idl_type: &IdlType) -> usize {
         match idl_type {
             IdlType::Primitive(p) => match p {
                 PrimitiveType::Void
@@ -237,9 +249,76 @@ impl RustGenerator {
                 | PrimitiveType::Double
                 | PrimitiveType::LongDouble => 8,
             },
-            IdlType::Array { inner, .. } => Self::cdr2_alignment(inner),
+            IdlType::Array { inner, .. } => Self::xcdr1_alignment(inner),
             IdlType::Sequence { .. } | IdlType::Map { .. } | IdlType::Named(_) => 4,
         }
+    }
+
+    /// XCDR v2 alignment table per OMG DDS-XTypes v1.3 (formal/2020-02-04).
+    ///
+    /// References:
+    /// - Section 7.4.2 "Extended CDR Representation (encoding version 2)",
+    ///   doc page 129: "INT64, UINT64, FLOAT64, and FLOAT128 are serialized
+    ///   into the CDR buffer at offsets that are aligned to 4 rather than 8
+    ///   as was the case in PLAIN_CDR."
+    /// - Section 7.4.3.2 "XCDR Stream State", `maxalign` variable (doc p.130).
+    /// - Section 7.4.3.2.2 / Table 37 (doc p.132): `MAXALIGN(VERSION2) = 4`,
+    ///   effective alignment = `MIN(type.alignment, XCDR.maxalign)`.
+    ///
+    /// Differs from [`Self::xcdr1_alignment`] only on 8-byte primitives:
+    /// `longlong`, `ulonglong`, `int64`, `uint64`, `double`, `long double`
+    /// align to **4** instead of 8.
+    ///
+    /// See `crates/hdds/tests/golden/xcdr/INVESTIGATION.md` on branch
+    /// `interop-fixes` for the full Phase 0 investigation report.
+    #[allow(dead_code)] // wired by callers in Phase 2 Etape 2.2; remove then.
+    pub(super) fn xcdr2_alignment(idl_type: &IdlType) -> usize {
+        match idl_type {
+            IdlType::Primitive(p) => match p {
+                PrimitiveType::Void
+                | PrimitiveType::Octet
+                | PrimitiveType::UInt8
+                | PrimitiveType::Int8
+                | PrimitiveType::Boolean
+                | PrimitiveType::Char => 1,
+                PrimitiveType::Short
+                | PrimitiveType::UnsignedShort
+                | PrimitiveType::Int16
+                | PrimitiveType::UInt16 => 2,
+                PrimitiveType::Long
+                | PrimitiveType::UnsignedLong
+                | PrimitiveType::Int32
+                | PrimitiveType::UInt32
+                | PrimitiveType::Float
+                | PrimitiveType::WChar
+                | PrimitiveType::String
+                | PrimitiveType::WString
+                | PrimitiveType::Fixed { .. } => 4,
+                PrimitiveType::LongLong
+                | PrimitiveType::UnsignedLongLong
+                | PrimitiveType::Int64
+                | PrimitiveType::UInt64
+                | PrimitiveType::Double
+                | PrimitiveType::LongDouble => 4,
+            },
+            IdlType::Array { inner, .. } => Self::xcdr2_alignment(inner),
+            IdlType::Sequence { .. } | IdlType::Map { .. } | IdlType::Named(_) => 4,
+        }
+    }
+
+    /// Legacy alias kept for callsite compatibility during Phase 2 Etape 2.1.
+    ///
+    /// **The name is a misnomer.** The table returned here is factually
+    /// XCDR v1 alignment (8-byte primitives on 8-byte boundaries), not the
+    /// XCDR v2 alignment mandated by the OMG DDS-XTypes v1.3 spec. See
+    /// `crates/hdds/tests/golden/xcdr/INVESTIGATION.md` for the full evidence.
+    ///
+    /// Phase 2 Etape 2.2 must update every callsite in `encode.rs`,
+    /// `decode.rs`, and `unions.rs` to select explicitly between
+    /// [`Self::xcdr1_alignment`] and [`Self::xcdr2_alignment`] based on the
+    /// target `@data_representation`, and then remove this alias.
+    pub(super) fn cdr2_alignment(idl_type: &IdlType) -> usize {
+        Self::xcdr1_alignment(idl_type)
     }
 
     /// Calculate fixed size for primitives (None for variable-size types)
