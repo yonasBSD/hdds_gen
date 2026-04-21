@@ -357,7 +357,6 @@ impl RustGenerator {
     ///
     /// See `crates/hdds/tests/golden/xcdr/INVESTIGATION.md` on branch
     /// `interop-fixes` for the full Phase 0 investigation report.
-    #[allow(dead_code)] // wired by callers in Phase 2 Etape 2.2; remove then.
     pub(super) fn xcdr2_alignment(idl_type: &IdlType) -> usize {
         match idl_type {
             IdlType::Primitive(p) => match p {
