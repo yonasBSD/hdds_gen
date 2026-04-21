@@ -497,30 +497,6 @@ fn xcdr_alignment_array_inherits_from_inner_type() {
     assert_eq!(RustGenerator::xcdr2_alignment(&array_of_u32), 4);
 }
 
-#[test]
-fn cdr2_alignment_legacy_alias_matches_xcdr1() {
-    // `cdr2_alignment` is a misnomer -- it returns XCDR v1 values. This test
-    // locks that intentional behaviour until Phase 2 Etape 2.2 removes the
-    // alias and updates all callsites.
-    let samples = [
-        IdlType::Primitive(PrimitiveType::Octet),
-        IdlType::Primitive(PrimitiveType::Int32),
-        IdlType::Primitive(PrimitiveType::Double),
-        IdlType::Primitive(PrimitiveType::Int64),
-        IdlType::Sequence {
-            inner: Box::new(IdlType::Primitive(PrimitiveType::Double)),
-            bound: None,
-        },
-    ];
-    for t in &samples {
-        assert_eq!(
-            RustGenerator::cdr2_alignment(t),
-            RustGenerator::xcdr1_alignment(t),
-            "cdr2_alignment must stay a direct alias of xcdr1_alignment: {t:?}"
-        );
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Container routing proof — Etape 2.2-d
 // ---------------------------------------------------------------------------
@@ -770,6 +746,97 @@ fn union_xcdr1_decode_case_named_invokes_sub_xcdr1() -> TestResult<()> {
     assert!(
         !xcdr2_body.contains("decode_cdr2_le"),
         "TaggedInner::decode_xcdr2_le must not call legacy decode_cdr2_le. Body:\n{xcdr2_body}"
+    );
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Delegator routing proof -- Etape 2.2-e
+// ---------------------------------------------------------------------------
+//
+// The trait delegator emitted by `helpers::emit_cdr_trait_delegator` routes
+// `Cdr2Encode::encode_cdr2_le` / `Cdr2Decode::decode_cdr2_le` to the type's
+// primary inherent method, picked by `primary_version(repr)` where `repr`
+// is read from `@data_representation`. These two tests lock that routing
+// end-to-end from the AST annotation to the generated delegator body.
+
+fn slice_between<'a>(src: &'a str, start: &str, end: &str) -> Option<&'a str> {
+    let s = src.find(start)? + start.len();
+    let len = src[s..].find(end)?;
+    Some(&src[s..s + len])
+}
+
+#[test]
+fn struct_without_annotation_delegator_targets_xcdr2() -> TestResult<()> {
+    let mut file = IdlFile::new();
+    let mut s = Struct::new("Probe");
+    s.add_field(Field::new("a", IdlType::Primitive(PrimitiveType::Octet)));
+    s.add_field(Field::new("b", IdlType::Primitive(PrimitiveType::Double)));
+    file.add_definition(Definition::Struct(s));
+
+    let r#gen = RustGenerator::new();
+    let out = r#gen.generate(&file)?;
+
+    let enc_body = slice_between(
+        &out,
+        "impl Cdr2Encode for Probe {\n    fn encode_cdr2_le(&self, dst: &mut [u8]) -> Result<usize, CdrError> {\n",
+        "\n    }\n",
+    )
+    .expect("Cdr2Encode for Probe delegator body not found");
+    assert!(
+        enc_body.contains("self.encode_xcdr2_le(dst)"),
+        "Probe without @data_representation must delegate encode_cdr2_le -> encode_xcdr2_le. \
+         Got body:\n{enc_body}"
+    );
+
+    let dec_body = slice_between(
+        &out,
+        "impl Cdr2Decode for Probe {\n    fn decode_cdr2_le(src: &[u8]) -> Result<(Self, usize), CdrError> {\n",
+        "\n    }\n",
+    )
+    .expect("Cdr2Decode for Probe delegator body not found");
+    assert!(
+        dec_body.contains("Self::decode_xcdr2_le(src)"),
+        "Probe without @data_representation must delegate decode_cdr2_le -> decode_xcdr2_le. \
+         Got body:\n{dec_body}"
+    );
+    Ok(())
+}
+
+#[test]
+fn struct_with_xcdr1_annotation_delegator_targets_xcdr1() -> TestResult<()> {
+    let mut file = IdlFile::new();
+    let mut s = Struct::new("ProbeV1");
+    s.add_annotation(Annotation::DataRepresentation("XCDR1".into()));
+    s.add_field(Field::new("a", IdlType::Primitive(PrimitiveType::Octet)));
+    s.add_field(Field::new("b", IdlType::Primitive(PrimitiveType::Double)));
+    file.add_definition(Definition::Struct(s));
+
+    let r#gen = RustGenerator::new();
+    let out = r#gen.generate(&file)?;
+
+    let enc_body = slice_between(
+        &out,
+        "impl Cdr2Encode for ProbeV1 {\n    fn encode_cdr2_le(&self, dst: &mut [u8]) -> Result<usize, CdrError> {\n",
+        "\n    }\n",
+    )
+    .expect("Cdr2Encode for ProbeV1 delegator body not found");
+    assert!(
+        enc_body.contains("self.encode_xcdr1_le(dst)"),
+        "ProbeV1 with @data_representation(XCDR1) must delegate encode_cdr2_le -> encode_xcdr1_le. \
+         Got body:\n{enc_body}"
+    );
+
+    let dec_body = slice_between(
+        &out,
+        "impl Cdr2Decode for ProbeV1 {\n    fn decode_cdr2_le(src: &[u8]) -> Result<(Self, usize), CdrError> {\n",
+        "\n    }\n",
+    )
+    .expect("Cdr2Decode for ProbeV1 delegator body not found");
+    assert!(
+        dec_body.contains("Self::decode_xcdr1_le(src)"),
+        "ProbeV1 with @data_representation(XCDR1) must delegate decode_cdr2_le -> decode_xcdr1_le. \
+         Got body:\n{dec_body}"
     );
     Ok(())
 }

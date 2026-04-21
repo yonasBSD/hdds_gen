@@ -164,14 +164,32 @@ pub(super) fn data_representation_annotation(annotations: &[Annotation]) -> Opti
 ///
 /// Both `encode_xcdr1_le` and `encode_xcdr2_le` inherent methods are always
 /// emitted (see [`VERSIONS_TO_EMIT`]); only the default wire representation
-/// exposed through the `Cdr2Encode` trait shifts based on the annotation:
+/// exposed through the `Cdr2Encode` trait shifts based on the annotation.
 ///
-/// - `@data_representation("XCDR1")` / `("PLAIN_CDR")` -> Xcdr1 delegate
-/// - otherwise -> Xcdr2 delegate (spec-correct default)
+/// The match is exhaustive over the four values the parser validates at
+/// `validate/rules/helpers.rs:54` (`"XCDR1"`, `"XCDR2"`, `"PLAIN_CDR"`,
+/// `"PLAIN_CDR2"`). Any other string reaching this function indicates a
+/// new accepted value was added to the parser without being wired here:
+/// a `debug_assert!` fires in debug builds so the mismatch surfaces, and
+/// release builds fall back to the spec-correct `Xcdr2` default.
+///
+/// - `"XCDR1"` / `"PLAIN_CDR"` -> `Xcdr1`
+/// - `"XCDR2"` / `"PLAIN_CDR2"` -> `Xcdr2`
+/// - `None` -> `Xcdr2` (no annotation = spec-correct default)
+/// - any other string -> debug-assert + fall back to `Xcdr2`
 pub(super) fn primary_version(repr: Option<&str>) -> CdrVersion {
     match repr {
-        Some("XCDR1" | "PLAIN_CDR") => CdrVersion::Xcdr1,
-        _ => CdrVersion::Xcdr2,
+        Some("XCDR1") | Some("PLAIN_CDR") => CdrVersion::Xcdr1,
+        Some("XCDR2") | Some("PLAIN_CDR2") | None => CdrVersion::Xcdr2,
+        Some(other) => {
+            debug_assert!(
+                false,
+                "primary_version: unexpected @data_representation value {other:?}; \
+                 parser accepts a value the codegen does not handle. \
+                 Falling back to Xcdr2."
+            );
+            CdrVersion::Xcdr2
+        }
     }
 }
 
@@ -372,20 +390,6 @@ impl RustGenerator {
             IdlType::Array { inner, .. } => Self::xcdr2_alignment(inner),
             IdlType::Sequence { .. } | IdlType::Map { .. } | IdlType::Named(_) => 4,
         }
-    }
-
-    /// Legacy alias kept for callsite compatibility during Phase 2 Etape 2.1.
-    ///
-    /// **The name is a misnomer.** The table returned here is factually
-    /// XCDR v1 alignment (8-byte primitives on 8-byte boundaries), not the
-    /// XCDR v2 alignment mandated by the OMG DDS-XTypes v1.3 spec. See
-    /// `crates/hdds/tests/golden/xcdr/INVESTIGATION.md` for the full evidence.
-    ///
-    /// Phase 2 Etape 2.2 commit 2 must remove this alias once every callsite
-    /// has migrated to [`Self::xcdr_alignment`] with an explicit version.
-    #[allow(dead_code)] // Only exercised by `cdr2_alignment_legacy_alias_matches_xcdr1` test; removed in commit 2.
-    pub(super) fn cdr2_alignment(idl_type: &IdlType) -> usize {
-        Self::xcdr1_alignment(idl_type)
     }
 
     /// Version-aware dispatcher introduced in Phase 2 Etape 2.2 commit 1.
