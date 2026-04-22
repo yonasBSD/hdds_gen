@@ -17,11 +17,10 @@ use std::fmt::Write;
 /// CDR encoding version threaded through the codegen pipeline.
 ///
 /// XCDR v1 and XCDR v2 share most of their serialization rules but diverge
-/// on the alignment of 8-byte primitives (cf. Phase 0 investigation report
-/// in `crates/hdds/tests/golden/xcdr/INVESTIGATION.md` on the HDDS tree).
-/// The codegen selects the right alignment table and, from Etape 2.2
-/// commit 2 onwards, the right function names and inter-type method
-/// invocations based on this enum.
+/// on the alignment of 8-byte primitives (XCDR v1 aligns on 8, XCDR v2 caps
+/// at 4 per OMG DDS-XTypes v1.3 Section 7.4.2). The codegen selects the
+/// right alignment table plus the matching function names and inter-type
+/// method invocations based on this enum.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CdrVersion {
     /// XCDR v1 per OMG DDS-XTypes v1.3 Section 7.4.1.
@@ -30,13 +29,11 @@ pub(crate) enum CdrVersion {
     Xcdr2,
 }
 
-/// All XCDR versions the generator always emits for every non-mutable
-/// non-compact struct (and in later sub-commits also for mutable, compact,
-/// and union types).
+/// XCDR versions the generator always emits for every named type (struct,
+/// union, enum, bitset, Fixed).
 ///
-/// Rationale (Olivier's architecture call, 2026-04-20): systematic dual
-/// emission avoids propagating a "target version" through the codegen when
-/// sub-types are invoked. Every generated type carries both
+/// Systematic dual emission avoids propagating a "target version" through
+/// nested type invocations. Every generated type carries both
 /// `encode_xcdr1_le` / `encode_xcdr2_le` inherent methods, so a caller
 /// encoding in XCDR v1 context always finds the matching sub-type method
 /// locally. The default wire representation (what `Cdr2Encode::encode_cdr2_le`
@@ -354,9 +351,6 @@ impl RustGenerator {
     /// Differs from [`Self::xcdr1_alignment`] only on 8-byte primitives:
     /// `longlong`, `ulonglong`, `int64`, `uint64`, `double`, `long double`
     /// align to **4** instead of 8.
-    ///
-    /// See `crates/hdds/tests/golden/xcdr/INVESTIGATION.md` on branch
-    /// `interop-fixes` for the full Phase 0 investigation report.
     pub(super) fn xcdr2_alignment(idl_type: &IdlType) -> usize {
         match idl_type {
             IdlType::Primitive(p) => match p {
@@ -391,13 +385,12 @@ impl RustGenerator {
         }
     }
 
-    /// Version-aware dispatcher introduced in Phase 2 Etape 2.2 commit 1.
-    ///
-    /// Every `emit_*` helper in `encode.rs`, `decode.rs`, and `unions.rs`
-    /// receives a [`CdrVersion`] parameter and funnels through this
-    /// dispatcher instead of calling the version-specific tables directly.
-    /// Flipping the caller's target version therefore automatically reroutes
-    /// the whole alignment chain.
+    /// Version-aware dispatcher. Every `emit_*` helper in `encode.rs`,
+    /// `decode.rs`, `unions.rs`, `encode_containers.rs`, and
+    /// `decode_containers.rs` receives a [`CdrVersion`] parameter and funnels
+    /// through this dispatcher instead of calling the version-specific
+    /// tables directly, so flipping the caller's target version reroutes the
+    /// whole alignment chain.
     pub(super) fn xcdr_alignment(idl_type: &IdlType, version: CdrVersion) -> usize {
         match version {
             CdrVersion::Xcdr1 => Self::xcdr1_alignment(idl_type),

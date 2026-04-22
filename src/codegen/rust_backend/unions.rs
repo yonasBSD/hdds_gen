@@ -89,11 +89,11 @@ impl RustGenerator {
             push_fmt(&mut output, format_args!("{indent}}}\n\n"));
         }
 
-        // Etape 2.2-c: dual emission for unions, same pattern as structs
-        // (2.2-a) -- inherent `encode_xcdrN_le` / `decode_xcdrN_le` methods
-        // for each version in VERSIONS_TO_EMIT, then a Cdr2Encode /
-        // Cdr2Decode trait delegator pointing at the primary version
-        // selected by the `@data_representation` annotation.
+        // Dual emission for unions, same pattern as structs: inherent
+        // `encode_xcdrN_le` / `decode_xcdrN_le` methods for each version in
+        // `VERSIONS_TO_EMIT`, then a `Cdr2Encode` / `Cdr2Decode` trait
+        // delegator pointing at the primary version selected by the
+        // `@data_representation` annotation.
         let repr = super::helpers::data_representation_annotation(&u.annotations);
         let primary = super::helpers::primary_version(repr.as_deref());
         for &version in super::helpers::VERSIONS_TO_EMIT {

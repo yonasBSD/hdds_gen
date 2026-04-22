@@ -330,7 +330,7 @@ fn union_default_case_enum_discriminant() -> TestResult<()> {
 }
 
 // ---------------------------------------------------------------------------
-// XCDR alignment tables (Phase 2 Etape 2.1)
+// XCDR alignment tables
 // ---------------------------------------------------------------------------
 //
 // Spec references:
@@ -338,9 +338,6 @@ fn union_default_case_enum_discriminant() -> TestResult<()> {
 //   for XCDR v1 (doc page 122).
 // - OMG DDS-XTypes v1.3 Section 7.4.2 + 7.4.3.2.2 Table 37 for XCDR v2
 //   (doc pages 129 and 132).
-//
-// See `crates/hdds/tests/golden/xcdr/INVESTIGATION.md` for the Phase 0
-// investigation that motivated adding xcdr2_alignment().
 
 #[test]
 fn xcdr1_alignment_primitives_match_spec_table_31() {
@@ -498,14 +495,13 @@ fn xcdr_alignment_array_inherits_from_inner_type() {
 }
 
 // ---------------------------------------------------------------------------
-// Container routing proof — Etape 2.2-d
+// Container routing proof
 // ---------------------------------------------------------------------------
 //
-// Verifies that the transitional bug documented in 2.2-a is fixed by 2.2-d:
-// when `Outer.encode_xcdr1_le` serializes a `sequence<Inner>` field, the
-// per-element loop must invoke `elem.encode_xcdr1_le(...)` (not
-// `elem.encode_cdr2_le(...)` which would delegate to `elem.encode_xcdr2_le`
-// via the sub-type's trait impl).
+// When `Outer.encode_xcdr1_le` serializes a `sequence<Inner>` field, the
+// per-element loop must invoke `elem.encode_xcdr1_le(...)`, not the legacy
+// `elem.encode_cdr2_le(...)` which would route through the sub-type's
+// primary-version trait impl and drop the caller's XCDR version choice.
 
 fn make_outer_with_inner_sequence() -> IdlFile {
     let mut file = IdlFile::new();
@@ -628,12 +624,11 @@ fn container_outer_xcdr1_decode_invokes_sub_xcdr1_not_cdr2() -> TestResult<()> {
 }
 
 // ---------------------------------------------------------------------------
-// Union routing proof -- Etape 2.2-c
+// Union routing proof
 // ---------------------------------------------------------------------------
 //
-// Verifies that union cases containing a named sub-type invoke the sub-type's
-// matching XCDR method (the critical sites that were flagged in Olivier's
-// 2.2-d review grep: unions.rs:554 encode + :655 decode).
+// Union cases containing a named sub-type must invoke the sub-type's
+// matching XCDR version method, not the legacy trait method.
 
 fn make_tagged_union_with_inner() -> IdlFile {
     let mut file = IdlFile::new();
@@ -751,14 +746,14 @@ fn union_xcdr1_decode_case_named_invokes_sub_xcdr1() -> TestResult<()> {
 }
 
 // ---------------------------------------------------------------------------
-// Delegator routing proof -- Etape 2.2-e
+// Delegator routing proof
 // ---------------------------------------------------------------------------
 //
 // The trait delegator emitted by `helpers::emit_cdr_trait_delegator` routes
 // `Cdr2Encode::encode_cdr2_le` / `Cdr2Decode::decode_cdr2_le` to the type's
 // primary inherent method, picked by `primary_version(repr)` where `repr`
-// is read from `@data_representation`. These two tests lock that routing
-// end-to-end from the AST annotation to the generated delegator body.
+// is read from `@data_representation`. Locks that routing end-to-end from
+// the AST annotation to the generated delegator body.
 
 fn slice_between<'a>(src: &'a str, start: &str, end: &str) -> Option<&'a str> {
     let s = src.find(start)? + start.len();
